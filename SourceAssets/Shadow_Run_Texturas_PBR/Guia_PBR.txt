@@ -1,0 +1,83 @@
+SHADOW RUN | TEXTURAS PBR
+==========================
+
+9 assets, 36 PNGs em 2048 × 2048. Os quatro arquivos de cada pasta têm
+o mesmo layout. Base Color e Normal são RGB. Metallic e Roughness são
+mapas em escala de cinza. O Base Color tem perfil sRGB.
+
+As texturas foram feitas a partir da direção visual das referências.
+Os modelos e suas UVs não foram usados na geração. Os sete atlas pedem
+ajuste das ilhas no Blender. Parede e piso usam toda a área de 0 a 1 e
+foram preparados para repetição. A faixa ciano da parede está no topo.
+
+ZONAS DOS ATLAS
+Os valores abaixo são para o UV Editor do Blender, com V=0 embaixo.
+Deixe uma margem entre as ilhas UV e as divisões para reduzir vazamento
+de cor nos mipmaps. As faixas recomendadas incluem margem de 32 px.
+
+Superior esquerda     U 0.016–0.484  |  V 0.516–0.984
+Superior direita      U 0.516–0.984  |  V 0.516–0.984
+Inferior esquerda     U 0.016–0.484  |  V 0.016–0.484
+Inferior direita      U 0.516–0.984  |  V 0.016–0.484
+
+Carabina
+  Sup. esquerda   Carcaça
+  Sup. direita    Cano e ferragens
+  Inf. esquerda   Empunhadura
+  Inf. direita    Detalhes âmbar
+
+Caixa de munição
+  Sup. esquerda   Tampa
+  Sup. direita    Corpo
+  Inf. esquerda   Fecho
+  Inf. direita    Bordas escuras
+
+Drone de segurança
+  Sup. esquerda   Blindagem
+  Sup. direita    Propulsores
+  Inf. esquerda   Lente e indicadores
+  Inf. direita    Suportes e ferragens
+
+Célula de energia
+  Sup. esquerda   Núcleo ciano
+  Sup. direita    Tampas
+  Inf. esquerda   Reforços
+  Inf. direita    Juntas
+
+Terminal de energia
+  Sup. esquerda   Pedestal
+  Sup. direita    Painel
+  Inf. esquerda   Aro e indicadores
+  Inf. direita    Ferragens
+
+Porta blindada
+  Sup. esquerda   Folhas
+  Sup. direita    Batente
+  Inf. esquerda   Faixas de segurança
+  Inf. direita    Indicadores
+
+Caixa de cobertura
+  Sup. esquerda   Corpo
+  Sup. direita    Painéis
+  Inf. esquerda   Cantos reforçados
+  Inf. direita    Ferragens
+
+BLENDER
+BaseColor  → Base Color do Principled BSDF, sRGB
+Metallic   → Metallic, Non-Color
+Roughness  → Roughness, Non-Color
+Normal     → Normal Map em Tangent Space → Normal do Principled, Non-Color
+
+Para iluminar núcleo, indicadores ou a lente do drone, use o mesmo atlas
+em um material aplicado apenas às faces luminosas e ligue a cor à emissão
+desse material. Ajuste a intensidade no Blender ou na Unreal.
+
+UNREAL
+Use sRGB no BaseColor e desative sRGB nos mapas de dados. Importe o Normal
+como Normal Map. Os PNGs de normal usam OpenGL (+Y). Inverta apenas o canal
+verde ao importar diretamente na Unreal para a convenção DirectX.
+
+Referências
+https://docs.blender.org/manual/en/latest/render/shader_nodes/displacement/normal_map.html
+https://dev.epicgames.com/documentation/en-us/unreal-engine/textures-in-unreal-engine
+https://dev.epicgames.com/documentation/unreal-engine/API/Runtime/Engine/Engine/UTexture

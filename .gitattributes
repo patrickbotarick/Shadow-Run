@@ -1,0 +1,6 @@
+* text=auto
+*.uasset binary
+*.umap binary
+*.fbx binary
+*.glb binary
+*.pdf binary

@@ -1,0 +1,26 @@
+SHADOW RUN | PACOTE DE EFEITOS SONOROS
+=====================================
+
+25 efeitos originais feitos por síntese e design de som.
+Formato: WAV PCM 16 bits, 48 kHz. O ambiente é estéreo, os demais sons são mono.
+Cada arquivo contém apenas o efeito indicado, com espaço para a cauda do som.
+
+Pastas
+01_Arma       Tiro (3 variações), tiro seco, recarga e impacto metálico
+02_Drone      Motor, detecção, ataque, dano e destruição
+03_Objetivo   Coleta e encaixe de célula, munição, porta e extração
+04_Jogador    Passos (2 variações) e dano recebido
+05_Interface  Foco, confirmação, pausar e continuar
+06_Ambiente   Fundo industrial contínuo
+
+Sugestões de uso na Unreal
+- Importe os WAV após extrair o ZIP. O catálogo lista os nomes e a duração.
+- Ative repetição na reprodução de Motor_Loop e Ambiente_Instalacao_Loop.
+  Use o motor como fonte 3D no drone e o ambiente estéreo como camada de fundo.
+- Reproduza os demais efeitos uma vez por evento. Em tiro e passos, sorteie
+  uma das variantes. UI e feedback local podem ser reproduzidos em 2D.
+- Recarga (1,38 s): solta o carregador em ~0,13 s, encaixa em ~0,68 s e
+  fecha o ferrolho em ~1,03 s. Sincronize com sua animação.
+- Na porta, o motor começa em ~0,21 s e o fim de curso chega em ~1,93 s.
+- Para sons do próprio menu de pausa, configure a reprodução de UI para
+  que os cliques possam soar enquanto o mundo estiver pausado.

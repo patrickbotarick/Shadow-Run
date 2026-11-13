@@ -1,0 +1,13 @@
+/Binaries/
+/DerivedDataCache/
+/Intermediate/
+/Saved/
+/.vs/
+/*.sln
+/*.slnx
+/.vsconfig
+/Content/Developers/
+/Content/Collections/
+/SourceAssets/tripo-out/**/task.json
+**/__pycache__/
+*.pyc

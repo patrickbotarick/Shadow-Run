@@ -1,0 +1,27 @@
+﻿Peça;Lógica 1×;PNG 2×;Uso
+Mira_Padrao;64 × 64;128 × 128;Mira branca com quatro traços
+Mira_Aberta;64 × 64;128 × 128;Mira aberta para feedback de dispersão
+Mira_Confirmacao_Acerto;64 × 64;128 × 128;Marcador de acerto em X, exibido brevemente
+Vida_Trilha;432 × 44;864 × 88;Trilha fixa da barra de vida
+Vida_Moldura;432 × 44;864 × 88;"Moldura superior da barra; aplique sobre a trilha e o preenchimento"
+Vida_Moldura_Critica;432 × 44;864 × 88;"Moldura superior da barra; aplique sobre a trilha e o preenchimento"
+Vida_Preenchimento;432 × 44;864 × 88;"Camada dinâmica de vida, alinhada à moldura; recorte horizontal"
+Vida_Preenchimento_Critico;432 × 44;864 × 88;"Camada dinâmica de vida, alinhada à moldura; recorte horizontal"
+Objetivo_Cabecalho;288 × 56;576 × 112;Contorno do rótulo OBJETIVO
+Objetivo_Marcador;16 × 36;32 × 72;Marcador à esquerda da instrução
+Contador_Linha_Ciano;320 × 12;640 × 24;Divisória para células e abates
+Municao_SubLinhar;320 × 32;640 × 64;Acabamento inferior do bloco de munição
+Interacao_Tecla;72 × 56;144 × 112;Moldura de tecla, com letra inserida por texto no centro
+Botao_Normal;540 × 82;1080 × 164;Base do botão sem seleção
+Botao_Foco;540 × 82;1080 × 164;Botão selecionado por mouse, teclado ou controle
+Botao_Pressionado;540 × 82;1080 × 164;Estado pressionado
+Botao_Desativado;540 × 82;1080 × 164;Estado desativado
+Pausa_Painel;640 × 620;1280 × 1240;Fundo translúcido para o painel da pausa
+Icone_Vida;64 × 64;128 × 128;Ícone de vida
+Icone_Celula;64 × 64;128 × 128;Ícone de celula
+Icone_Municao;64 × 64;128 × 128;Ícone de municao
+Icone_Abates;64 × 64;128 × 128;Ícone de abates
+Icone_Interagir;64 × 64;128 × 128;Ícone de interagir
+Icone_Porta_Trancada;64 × 64;128 × 128;Ícone de porta trancada
+Icone_Saida;64 × 64;128 × 128;Ícone de saida
+Icone_Aviso;64 × 64;128 × 128;Ícone de aviso

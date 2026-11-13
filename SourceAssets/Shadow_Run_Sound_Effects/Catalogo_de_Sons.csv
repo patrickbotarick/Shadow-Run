@@ -1,0 +1,26 @@
+﻿Arquivo;Evento;Duracao_s;Reproducao
+01_Arma/SFX_SR_Tiro_Carabina_01.wav;Disparo de carabina, variante;0.65;one-shot
+01_Arma/SFX_SR_Tiro_Carabina_02.wav;Disparo de carabina, variante;0.65;one-shot
+01_Arma/SFX_SR_Tiro_Carabina_03.wav;Disparo de carabina, variante;0.65;one-shot
+01_Arma/SFX_SR_Tiro_Seco.wav;Gatilho com carregador vazio;0.20;one-shot
+01_Arma/SFX_SR_Recarga.wav;Solta carregador, encaixa outro e fecha o ferrolho;1.38;one-shot
+01_Arma/SFX_SR_Impacto_Metal.wav;Projétil acertando superfície metálica;0.42;one-shot
+02_Drone/SFX_SR_Drone_Motor_Loop.wav;Motor contínuo para o drone em movimento;4.00;loop
+02_Drone/SFX_SR_Drone_Detectou.wav;Drone detecta o jogador;0.57;one-shot
+02_Drone/SFX_SR_Drone_Ataque.wav;Disparo de pulso do drone;0.48;one-shot
+02_Drone/SFX_SR_Drone_Dano.wav;Impacto curto de dano no drone;0.36;one-shot
+02_Drone/SFX_SR_Drone_Destruido.wav;Falha elétrica, ruptura e fragmentos metálicos;1.47;one-shot
+03_Objetivo/SFX_SR_Celula_Coletada.wav;Coleta de célula, sinal agudo ascendente;0.68;one-shot
+03_Objetivo/SFX_SR_Celula_Encaixada.wav;Engate metálico seguido de energização do terminal;1.13;one-shot
+03_Objetivo/SFX_SR_Municao_Coletada.wav;Coleta da caixa de munição;0.34;one-shot
+03_Objetivo/SFX_SR_Porta_Trancada.wav;Tentativa de abrir a saída sem todas as células;0.57;one-shot
+03_Objetivo/SFX_SR_Porta_Abrindo.wav;Trava solta, motor desliza e porta chega ao fim de curso;2.34;one-shot
+03_Objetivo/SFX_SR_Fuga_Concluida.wav;Confirmação de extração;1.75;one-shot
+04_Jogador/SFX_SR_Passo_Metal_01.wav;Passo em piso metálico, variante;0.27;one-shot
+04_Jogador/SFX_SR_Passo_Metal_02.wav;Passo em piso metálico, variante;0.27;one-shot
+04_Jogador/SFX_SR_Jogador_Dano.wav;Impacto grave de dano recebido;0.44;one-shot
+05_Interface/SFX_SR_UI_Foco.wav;Foco mudou para outro botão;0.13;one-shot
+05_Interface/SFX_SR_UI_Confirmar.wav;Ativação de opção do menu;0.32;one-shot
+05_Interface/SFX_SR_UI_Pausar.wav;Abertura da pausa;0.33;one-shot
+05_Interface/SFX_SR_UI_Continuar.wav;Retorno ao gameplay;0.33;one-shot
+06_Ambiente/SFX_SR_Ambiente_Instalacao_Loop.wav;Ventilação e maquinaria ao fundo, estéreo;12.00;loop

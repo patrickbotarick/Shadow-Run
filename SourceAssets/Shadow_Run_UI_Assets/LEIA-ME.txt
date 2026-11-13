@@ -1,0 +1,36 @@
+SHADOW RUN | KIT DE INTERFACE
+=============================
+
+26 peças independentes de HUD e menu.
+PNG RGBA transparente em 2× para importar. SVG editável na dimensão lógica 1×.
+Previa_UI.png apresenta uma composição demonstrativa. Os assets são entregues sem
+texto para que os valores, rótulos e teclas possam ser montados como texto no UMG.
+
+MIRA
+Use Mira_Padrao com alinhamento 0,5 / 0,5 e ancoragem no centro da tela.
+O arquivo tem 128 × 128 px, com tamanho lógico sugerido de 64 × 64.
+Mira_Aberta é opcional para feedback de dispersão. O marcador em X pode ser
+mostrado brevemente sobre a mira quando houver acerto confirmado.
+
+VIDA
+As camadas têm a mesma área lógica (432 × 44) e a mesma origem. Empilhe trilha,
+preenchimento e moldura nessa ordem. Use o PNG de preenchimento na imagem Fill
+de uma Progress Bar, da esquerda para a direita, em modo de preenchimento Mask.
+A moldura fica por cima, fixa. Troque a moldura e o preenchimento para as versões
+críticas conforme o estado da vida. A barra é entregue sempre com o desenho cheio.
+
+CONTADORES E BOTÕES
+Use Text Blocks para vida, munição atual e de reserva, células e abates.
+Use os ícones e linhas como elementos separados. O foco ciano serve tanto
+para o menu principal quanto para a pausa. Os quatro estados do botão têm
+a mesma dimensão. A moldura de interação recebe a tecla dinamicamente.
+
+ESTILO
+Títulos: Barlow Condensed 700 ou 800.
+Interface: Chakra Petch 500 a 700.
+Na prévia de composição foi usada uma fonte de demonstração.
+Paleta: #0B1014, #192228, #394B55, #F1F5F7, #A9B8C1, #22E6F2,
+#15343D, #FFB54D e #FF4D4F.
+
+Os PNGs estão a 2× da dimensão do SVG. No UMG, use o tamanho lógico indicado
+em Catalogo_UI.csv como ponto de partida para um layout 1920 × 1080.
