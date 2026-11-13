@@ -1,5 +1,6 @@
 """Build weapon materials and import a supplied pistol GLB for the prototype."""
 from pathlib import Path
+import runpy
 import sys
 import unreal as ue
 
@@ -41,24 +42,6 @@ def save(mat):
         raise RuntimeError(f"Failed to save {mat.get_path_name()}")
 
 
-rifle = material("M_CarbineGunmetal")
-texture = ASSETS.load_asset("/Game/ShadowRun/Models/futuristic_gun_3d_model/futuristic_gun_3d_model_basecolor")
-if not texture:
-    raise RuntimeError("Missing original carbine texture")
-sample = node(rifle, ue.MaterialExpressionTextureSample, -700, 0, texture=texture,
-              sampler_type=ue.MaterialSamplerType.SAMPLERTYPE_COLOR)
-tint = node(rifle, ue.MaterialExpressionConstant3Vector, -700, 250,
-            constant=ue.LinearColor(.32, .38, .43))
-multiply = node(rifle, ue.MaterialExpressionMultiply, -410, 0)
-wire(sample, "RGB", multiply, "A")
-wire(tint, "", multiply, "B")
-output(multiply, "", ue.MaterialProperty.MP_BASE_COLOR)
-for row, (prop, value) in enumerate(((ue.MaterialProperty.MP_METALLIC, .56),
-                                     (ue.MaterialProperty.MP_ROUGHNESS, .41))):
-    scalar = node(rifle, ue.MaterialExpressionConstant, -370, 220 + row * 120, r=value)
-    output(scalar, "", prop)
-save(rifle)
-
 for name, tex in (("M_ShotFlash", "Flash_Tiro"), ("M_ShotTrace", "Tracante"),
                   ("M_ShotImpact", "Impacto_Metal"), ("M_DroneFlash", "Flare_Energia")):
     mat = material(name)
@@ -98,4 +81,5 @@ if len(sys.argv) > 1:
     mesh = ASSETS.load_asset(package)
     ue.log(f"SHADOW_RUN_PISTOL_BOUNDS {mesh.get_bounding_box()}")
 
+runpy.run_path(str(Path(__file__).with_name("build_weapon_finishes.py")))
 ue.log("SHADOW_RUN_WEAPONS_READY")

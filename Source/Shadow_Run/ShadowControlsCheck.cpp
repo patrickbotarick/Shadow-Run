@@ -17,6 +17,7 @@
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
 #include "Misc/Paths.h"
+#include "Materials/MaterialInterface.h"
 #include "UnrealClient.h"
 
 namespace
@@ -74,6 +75,18 @@ namespace
             const auto Capture = [](const TCHAR* Name) {
                 if (FParse::Param(FCommandLine::Get(), TEXT("ShadowCaptureUI")))
                     FScreenshotRequest::RequestScreenshot(FPaths::ProjectSavedDir()/Name, false, false);
+            };
+            const auto VerifyWeaponFinish = [this,Runner](FName Expected) {
+                TInlineComponentArray<UStaticMeshComponent*> Meshes(Runner);
+                for (const auto* Mesh : Meshes)
+                {
+                    if (Mesh->GetFName() != TEXT("Carbine"))
+                        continue;
+                    const auto* Finish = Mesh->GetMaterial(0);
+                    Verify(Finish && Finish->GetFName() == Expected, TEXT("Equipped weapon uses its gunmetal material"));
+                    return;
+                }
+                Verify(false,TEXT("First-person weapon mesh exists"));
             };
             const auto ClickShop = [this, PC](FName Name, FVector2D Center)
             {
@@ -160,6 +173,7 @@ namespace
                 break;
             case 104:
                 Verify(Runner->HasCarbine(), TEXT("Reception carbine pickup"));
+                VerifyWeaponFinish(TEXT("M_CarbineGunmetal"));
                 Runner->SetActorLocation(Mode->GetWorkbenchPosition()+FVector(-100,0,45));
                 Tap(EKeys::E);
                 Step = 117;
@@ -286,7 +300,19 @@ namespace
             case 105:
                 Verify(Runner->HasPistolEquipped() && Runner->Magazine == 12 && Runner->Reserve == 48,
                        TEXT("2 equips pistol with separate ammo"));
+                VerifyWeaponFinish(TEXT("M_PistolGunmetal"));
+                PC->SetControlRotation(FRotator::ZeroRotator);
+                Step = 131;
+                Wait(.65);
+                break;
+            case 131:
+                Capture(TEXT("Shadow_Run-Pistola.png"));
+                Step = 128;
+                Wait(.18);
+                break;
+            case 128:
                 Input(EKeys::LeftMouseButton, IE_Pressed, 1);
+                Step = 106;
                 Wait(.40);
                 break;
             case 106:
@@ -361,6 +387,18 @@ namespace
                        TEXT("Deposit stages drones and barrier only for upcoming combat rooms"));
                 if (StagedDrone.IsValid() && ShotBarrier.IsValid())
                 {
+                    bool bFieldFits = false;
+                    for (TActorIterator<AActor> It(World.Get()); It; ++It)
+                    {
+                        if (!It->ActorHasTag(TEXT("ShadowPortalField")))
+                            continue;
+                        FVector Center, Extent;
+                        It->GetActorBounds(false,Center,Extent);
+                        bFieldFits = FMath::IsNearlyEqual(Center.X,ShotBarrier->GetActorLocation().X,1.) &&
+                            Extent.Y <= 145 && Extent.Z <= 105;
+                        break;
+                    }
+                    Verify(bFieldFits, TEXT("Visible field fits inside the doorway blocker"));
                     StagedPosition = StagedDrone->GetActorLocation();
                     const FVector Eye = ShotBarrier->GetActorLocation() - FVector(130,0,28);
                     const FVector Aim = (StagedDrone->GetActorLocation() - Eye).GetSafeNormal();
@@ -377,7 +415,7 @@ namespace
                 Tap(EKeys::E);
                 if (Transitions == 0 && ShotBarrier.IsValid())
                 {
-                    Runner->SetActorLocation(ShotBarrier->GetActorLocation()-FVector(355,0,82));
+                    Runner->SetActorLocation(ShotBarrier->GetActorLocation()-FVector(355,0,7));
                     PC->SetControlRotation(FRotator::ZeroRotator);
                     Step = 126;
                     Wait(.65);
@@ -457,8 +495,17 @@ namespace
                 break;
             case 121:
                 Verify(Mode->IsShopOpen(), TEXT("E opens transition workshop"));
+                Runner->Health = Runner->MaxHealth;
+                Tap(EKeys::Four);
+                Tap(EKeys::Enter);
+                Step = 129;
+                Wait(.15);
+                break;
+            case 129:
+                Verify(Mode->GetCredits()==120 && !Mode->HasBoughtHeal(), TEXT("Full health rejects healing without charging"));
                 Tap(EKeys::Two);
                 Tap(EKeys::Enter);
+                Step = 122;
                 Wait(.15);
                 break;
             case 122:
@@ -474,6 +521,24 @@ namespace
                 const int32 HealthBefore = Runner->Health;
                 Runner->HitByDrone(15);
                 Verify(Runner->Shield==10 && Runner->Health==HealthBefore, TEXT("Shield absorbs damage before health"));
+                Runner->Health = Runner->MaxHealth-20;
+                ClickShop(FName(TEXT("ShopCard"),4), {746,196});
+                Capture(TEXT("Shadow_Run-Oficina-Cura.png"));
+                Step = 130;
+                Wait(.2);
+                break;
+            }
+            case 130:
+            {
+                Verify(Mode->GetShopSelection()==3, TEXT("Healing card can be selected in the transition shop"));
+                ClickShop(TEXT("ShopBuy"), {700,368});
+                Verify(Runner->Health==Runner->MaxHealth && Mode->GetCredits()==55 &&
+                       Mode->RunCreditsSpent==145 && Mode->HasBoughtHeal() && Mode->HasBoughtPerk(),
+                       TEXT("Healing caps at maximum and is independent of the perk purchase"));
+                Runner->Health -= 10;
+                Mode->TryShopChoice(*Runner,3);
+                Verify(Runner->Health==Runner->MaxHealth-10 && Mode->GetCredits()==55,
+                       TEXT("Second heal in the same workshop is rejected"));
                 Tap(EKeys::E);
                 Step = 115;
                 Wait(1.15);
@@ -508,7 +573,7 @@ namespace
                        NewMode->Carried==0 && NewMode->Deposited==0 && NewMode->Kills==0 &&
                        Runner->Health==100 && Runner->Magazine==24 && Runner->Reserve==96,
                        TEXT("F5 resets attempt and resources"));
-                Verify(NewMode && NewMode->GetCredits()==80 && NewMode->GetBestScore()==300 &&
+                Verify(NewMode && NewMode->GetCredits()==55 && NewMode->GetBestScore()==300 &&
                        FMath::IsNearlyEqual(Runner->DamageMultiplier,1.05f) && Runner->MaxShield==0 &&
                        NewMode->Score==0 && NewMode->RunCreditsSpent==0,
                        TEXT("Reloaded SaveGame keeps permanent progress and clears run perks"));
@@ -531,7 +596,7 @@ namespace
             {
                 auto* NewMode = World->GetAuthGameMode<AShadowPrototype>();
                 Verify(NewMode && NewMode != Mode.Get() && NewMode->GetMenu() == EShadowMenu::Main &&
-                       UGameplayStatics::IsGamePaused(Runner) && NewMode->GetCredits()==80,
+                       UGameplayStatics::IsGamePaused(Runner) && NewMode->GetCredits()==55,
                        TEXT("Returning from pause opens main menu and preserves permanent progress"));
                 UE_LOG(LogTemp, Display, TEXT("SR_CONTROLS_DONE failures=%d"), Failures);
                 FPlatformMisc::RequestExitWithStatus(false,Failures ? 1 : 0);

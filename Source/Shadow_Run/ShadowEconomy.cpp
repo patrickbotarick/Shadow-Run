@@ -9,6 +9,9 @@ namespace
 {
     constexpr int32 MaxLevel = 5;
     constexpr int32 PerkCosts[] = { 50, 40, 40 };
+    constexpr int32 HealIndex = 3;
+    constexpr int32 HealPrice = 25;
+    constexpr int32 HealAmount = 35;
     constexpr int32 UpgradeCosts[] = { 80, 65, 60, 75 };
     constexpr int32 MaxCredits = 999999;
 }
@@ -95,8 +98,30 @@ bool AShadowPrototype::TryShopChoice(AShadowRunner& Player, int32 Index)
     }
 
     const bool bTemporary = IsWorkshop();
-    if (Index < 0 || Index >= (bTemporary ? 3 : 4))
+    if (Index < 0 || Index >= 4)
         return true;
+    if (bTemporary && Index == HealIndex)
+    {
+        if (Player.Health >= Player.MaxHealth || bHealBoughtThisVisit || Profile->Credits < HealPrice)
+        {
+            Notice(Player.Health >= Player.MaxHealth ? TEXT("Vida cheia") :
+                bHealBoughtThisVisit ? TEXT("Cura já usada nesta visita") : TEXT("Créditos insuficientes"));
+            return true;
+        }
+        Profile->Credits -= HealPrice;
+        if (!SaveProfile())
+        {
+            Profile->Credits += HealPrice;
+            return true;
+        }
+        const int32 Restored = FMath::Min(HealAmount, Player.MaxHealth - Player.Health);
+        Player.Health += Restored;
+        RunCreditsSpent += HealPrice;
+        bHealBoughtThisVisit = true;
+        Sound(TEXT("SFX_SR_UI_Confirmar"), .45f);
+        Notice(*FString::Printf(TEXT("+%d de vida recuperada"), Restored));
+        return true;
+    }
     if (bTemporary && bPerkBoughtThisVisit)
     {
         Notice(TEXT("Um perk por visita"));
@@ -142,7 +167,7 @@ bool AShadowPrototype::SelectShopCard(int32 Index)
 {
     if (!bShopOpen)
         return false;
-    if (Index >= 0 && Index < (IsWorkshop() ? 3 : 4) && ShopSelection != Index)
+    if (Index >= 0 && Index < 4 && ShopSelection != Index)
     {
         ShopSelection = Index;
         Sound(TEXT("SFX_SR_UI_Foco"), .35f);
@@ -152,7 +177,7 @@ bool AShadowPrototype::SelectShopCard(int32 Index)
 
 void AShadowPrototype::MoveShopSelection(int32 X, int32 Y)
 {
-    const int32 Index = IsWorkshop() ? (ShopSelection + X + Y + 3) % 3
+    const int32 Index = IsWorkshop() ? (ShopSelection + X + Y + 4) % 4
         : (ShopSelection % 2 + X + 2) % 2 + 2 * ((ShopSelection / 2 + Y + 2) % 2);
     SelectShopCard(Index);
 }
@@ -169,7 +194,11 @@ TArray<FShadowShopCard> AShadowPrototype::GetShopOptions(const AShadowRunner& Pl
         return {
             {TEXT("PULSO OFENSIVO"), TEXT("+20% de dano"), PerkCosts[0], !bPerkBoughtThisVisit && GetCredits() >= PerkCosts[0]},
             {TEXT("ESCUDO EXTRA"), TEXT("+25 de escudo"), PerkCosts[1], !bPerkBoughtThisVisit && GetCredits() >= PerkCosts[1]},
-            {TEXT("RECARGA RÁPIDA"), TEXT("-15% no tempo de recarga"), PerkCosts[2], !bPerkBoughtThisVisit && GetCredits() >= PerkCosts[2]}
+            {TEXT("RECARGA RÁPIDA"), TEXT("-15% no tempo de recarga"), PerkCosts[2], !bPerkBoughtThisVisit && GetCredits() >= PerkCosts[2]},
+            {TEXT("KIT DE CURA"), bHealBoughtThisVisit ? TEXT("Usado nesta visita") :
+                Player.Health >= Player.MaxHealth ? TEXT("Vida cheia") : FString::Printf(TEXT("Recupera %d de vida"),
+                    FMath::Min(HealAmount, Player.MaxHealth - Player.Health)), HealPrice,
+                !bHealBoughtThisVisit && Player.Health < Player.MaxHealth && GetCredits() >= HealPrice}
         };
 
     const FString Values[] = {

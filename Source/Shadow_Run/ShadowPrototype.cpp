@@ -30,8 +30,11 @@ namespace
     constexpr float RoomLength = 1400.f;
     constexpr float RoomWidth = 1000.f;
     constexpr float PortalHalfWidth = 145.f;
-    constexpr float PortalBarrierDepth = 80.f;
-    constexpr float PortalFieldHeight = 204.f;
+    constexpr float PortalCrossingDepth = 80.f;
+    constexpr float PortalJambInset = 29.f;
+    constexpr float PortalOpeningHeight = 210.f;
+    constexpr float PortalFieldHeight = PortalOpeningHeight - 4.f;
+    constexpr float PortalFieldHalfWidth = PortalHalfWidth - 2.f;
     constexpr float DroneRadius = 74.f;
     constexpr float DroneMeshYaw = 180.f;
     constexpr float WorkshopRise = 144.f;
@@ -106,6 +109,7 @@ AShadowRunner::AShadowRunner()
     Eyes->SetRelativeLocation(FVector(0, 0, 62));
     Eyes->bUsePawnControlRotation = true;
     Rifle = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("Carbine"));
+    Rifle->SetForceDisableNanite(true);
     Rifle->SetupAttachment(Eyes);
     Rifle->SetCollisionEnabled(ECollisionEnabled::NoCollision);
     Rifle->SetCastShadow(false);
@@ -186,12 +190,11 @@ void AShadowRunner::EquipWeapon(bool bPistol)
     Reserve = bPistol ? PistolReserve : CarbineReserve;
     Rifle->EmptyOverrideMaterials();
     Rifle->SetStaticMesh(WeaponMesh);
-    if (!bPistol)
-    {
-        auto* Finish = Asset<UMaterialInterface>(TEXT("/Game/ShadowRun/Weapons/M_CarbineGunmetal.M_CarbineGunmetal"));
-        if (Finish)
-            Rifle->SetMaterial(0, Finish);
-    }
+    auto* Finish = Asset<UMaterialInterface>(bPistol ? TEXT("/Game/ShadowRun/Weapons/M_PistolGunmetal.M_PistolGunmetal")
+        : TEXT("/Game/ShadowRun/Weapons/M_CarbineGunmetal.M_CarbineGunmetal"));
+    if (Finish)
+        for (int32 Slot = 0; Slot < Rifle->GetNumMaterials(); ++Slot)
+            Rifle->SetMaterial(Slot, Finish);
     const FBox Bounds = WeaponMesh->GetBoundingBox();
     RifleCenter = Bounds.GetCenter();
     RifleScale = bPistol ? 35 / FMath::Max(1.0, Bounds.GetSize().Y)
@@ -475,7 +478,7 @@ void AShadowPrototype::BuildRoom(FRoom& Room)
           FVector(20,500 + Exit - PortalHalfWidth,360), Wall);
     Piece(FVector(RoomLength-10,(500 + Exit + PortalHalfWidth)/2,180),
           FVector(20,500 - Exit - PortalHalfWidth,360), Wall);
-    constexpr float PassageHeight = 210.f;
+    constexpr float PassageHeight = PortalOpeningHeight;
     const float HeaderBottom = PortalBase + PassageHeight;
     Piece(FVector(RoomLength-24,Exit,(HeaderBottom+360)/2), FVector(56, 2*PortalHalfWidth+24, 360-HeaderBottom), Trim);
     Room.Door = Piece(FVector(RoomLength-19,Exit,PortalBase+PassageHeight/2), FVector(34,2 * PortalHalfWidth+2,PassageHeight), Trim);
@@ -488,7 +491,7 @@ void AShadowPrototype::BuildRoom(FRoom& Room)
     for (float Side : {-1.f, 1.f})
     {
         const float JambY = Exit + Side * (PortalHalfWidth + 7);
-        Piece(FVector(RoomLength-29,JambY,PortalBase+PassageHeight/2), FVector(54,14,PassageHeight), Trim);
+        Piece(FVector(RoomLength-PortalJambInset,JambY,PortalBase+PassageHeight/2), FVector(54,14,PassageHeight), Trim);
         auto* LampStrip = Piece(FVector(RoomLength-58,JambY,PortalBase+96), FVector(4,7,132), AmberStrip);
         LampStrip->SetActorEnableCollision(false);
         Room.DoorIndicators.Add(LampStrip->GetStaticMeshComponent());
@@ -557,6 +560,7 @@ void AShadowPrototype::ActivateRoom()
 {
     CloseShop();
     bPerkBoughtThisVisit = false;
+    bHealBoughtThisVisit = false;
     if (IsWorkshop())
         if (auto* Runner = Cast<AShadowRunner>(UGameplayStatics::GetPlayerPawn(this, 0)))
             Runner->Shield = Runner->MaxShield;
@@ -625,45 +629,47 @@ void AShadowPrototype::StageNextRoom()
         StagedDrones[Index].Actor->Tags.Add(TEXT("ShadowStagedDrone"));
     }
 
-    BuildPortalBarrier(Next.Origin + FVector(PortalBarrierDepth,0,0));
+    BuildPortalBarrier(Next.Origin - FVector(PortalJambInset,0,0));
 }
 
 void AShadowPrototype::BuildPortalBarrier(const FVector& Plane)
 {
-    auto* Blocker = Block(GetWorld(), Plane+FVector(0,0,180), FVector(4,RoomWidth+24,360));
-    auto* Collision = Blocker->GetStaticMeshComponent();
-    Collision->SetVisibility(false);
-    Collision->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
-    Collision->SetCollisionResponseToAllChannels(ECR_Ignore);
-    Collision->SetCollisionResponseToChannel(ECC_Visibility,ECR_Block);
-    Blocker->Tags.Add(TEXT("ShadowShotBarrier"));
-    PortalShotBlocker = Blocker;
-    PortalBarrier.Add(Blocker);
+    auto AddShotBlocker = [&](FVector At, FVector Size, FName Tag) {
+        auto* Blocker = Block(GetWorld(), At, Size);
+        auto* Collision = Blocker->GetStaticMeshComponent();
+        Collision->SetVisibility(false);
+        Collision->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+        Collision->SetCollisionResponseToAllChannels(ECR_Ignore);
+        Collision->SetCollisionResponseToChannel(ECC_Visibility,ECR_Block);
+        Blocker->Tags.Add(Tag);
+        PortalBarrier.Add(Blocker);
+        return Blocker;
+    };
+    PortalShotBlocker = AddShotBlocker(Plane+FVector(0,0,PortalOpeningHeight/2),
+        FVector(4,2*PortalHalfWidth+4,PortalOpeningHeight+4), TEXT("ShadowShotBarrier"));
+    // Guard the gap between the visible field and the point where the player has cleared the doorway.
+    AddShotBlocker(Next.Origin+FVector(PortalCrossingDepth,0,180), FVector(4,RoomWidth+24,360), TEXT("ShadowPortalThreshold"));
 
-    PortalPlane = Plane;
+    PortalPlane = Plane + FVector(0,0,2);
     auto* Quad = Asset<UStaticMesh>(TEXT("/Game/ShadowRun/VFX/Malhas/SM_VFX_Quad.SM_VFX_Quad"));
     auto* FieldMaterial = Asset<UMaterialInterface>(TEXT("/Game/ShadowRun/VFX/M_PortalField.M_PortalField"));
     if (Quad && FieldMaterial)
     {
-        auto* Field = Block(GetWorld(), Plane, FVector(PortalFieldHeight,2*PortalHalfWidth,1), Quad);
+        auto* Field = Block(GetWorld(), PortalPlane, FVector(PortalFieldHeight,2*PortalFieldHalfWidth,1), Quad);
         Field->SetActorEnableCollision(false);
         Field->SetActorRotation(FRotator(90,0,0));
-        Field->SetActorLocation(Plane+FVector(0,0,PortalFieldHeight/2) -
+        Field->SetActorLocation(PortalPlane+FVector(0,0,PortalFieldHeight/2) -
             Field->GetActorRotation().RotateVector(Quad->GetBoundingBox().GetCenter() * Field->GetActorScale3D()));
         Field->GetStaticMeshComponent()->SetCastShadow(false);
         PortalField = Field->GetStaticMeshComponent()->CreateDynamicMaterialInstance(0, FieldMaterial);
+        Field->Tags.Add(TEXT("ShadowPortalField"));
         PortalBarrier.Add(Field);
     }
-    auto* Trim = Asset<UMaterialInterface>(TEXT("/Game/ShadowRun/Sector/M_SectorTrim.M_SectorTrim"));
     auto* CyanSurface = Asset<UMaterialInterface>(TEXT("/Game/ShadowRun/Sector/M_SectorCyan.M_SectorCyan"));
     for (float Side : {-1.f, 1.f})
     {
-        const double Y = Side*(PortalHalfWidth+6);
-        auto* Emitter = Block(GetWorld(), Plane+FVector(0,Y,102), FVector(26,17,204));
-        Emitter->SetActorEnableCollision(false);
-        Emitter->GetStaticMeshComponent()->SetMaterial(0, Trim);
-        PortalBarrier.Add(Emitter);
-        auto* Core = Block(GetWorld(), Plane+FVector(-14,Y,102), FVector(4,5,174));
+        const double Y = Side*(PortalFieldHalfWidth-2);
+        auto* Core = Block(GetWorld(), Plane+FVector(-3,Y,105), FVector(4,4,182));
         Core->SetActorEnableCollision(false);
         Core->GetStaticMeshComponent()->SetMaterial(0, CyanSurface);
         PortalBarrier.Add(Core);
@@ -677,7 +683,7 @@ void AShadowPrototype::BuildPortalBarrier(const FVector& Plane)
     Text->SetWorldSize(13.f);
     Text->SetCollisionEnabled(ECollisionEnabled::NoCollision);
     Text->RegisterComponent();
-    Sign->SetActorLocationAndRotation(Plane+FVector(-12,0,220), FRotator(0,180,0));
+    Sign->SetActorLocationAndRotation(Plane+FVector(-25,0,204), FRotator(0,180,0));
     PortalBarrier.Add(Sign);
 }
 
@@ -986,7 +992,7 @@ void AShadowPrototype::Tick(float DeltaSeconds)
                     Indicator->SetMaterial(0, CyanSurface);
     }
     const FVector Local = Player->GetActorLocation() - Next.Origin;
-    if (IsPassageOpen() && Local.X >= PortalBarrierDepth && Local.X < 350 &&
+    if (IsPassageOpen() && Local.X >= PortalCrossingDepth && Local.X < 350 &&
         FMath::Abs(Local.Y) < RoomWidth / 2 && Local.Z > 45 && Local.Z < 260)
     {
         AdvanceRoom();
@@ -1075,18 +1081,19 @@ void AShadowPrototype::Fire(AShadowRunner& Player, const FVector& Origin, const 
     if (FVector::DotProduct(AimPoint - Muzzle, Direction) > 0 &&
         GetWorld()->LineTraceSingleByChannel(MuzzleHit, Muzzle, AimPoint + Direction * 2, ECC_Visibility, Query))
         Hit = MuzzleHit;
-    const bool bBarrierHit = PortalShotBlocker && Hit.GetActor() == PortalShotBlocker;
+    const bool bFieldHit = PortalShotBlocker && Hit.GetActor() == PortalShotBlocker;
+    const bool bBarrierHit = bFieldHit || (Hit.GetActor() && Hit.GetActor()->ActorHasTag(TEXT("ShadowPortalThreshold")));
     ShotEffects(Muzzle, Hit.bBlockingHit ? Hit.ImpactPoint : AimPoint, false, Hit.bBlockingHit, bBarrierHit);
     static const TCHAR* ShotSounds[] = {TEXT("SFX_SR_Tiro_Carabina_01"), TEXT("SFX_SR_Tiro_Carabina_02"),
                                        TEXT("SFX_SR_Tiro_Carabina_03")};
     Sound(ShotSounds[FMath::RandRange(0, 2)], Player.HasPistolEquipped() ? .34f : .48f);
     if (bBarrierHit)
     {
-        if (PortalField)
+        if (PortalField && bFieldHit)
         {
             const FVector At = Hit.ImpactPoint - PortalPlane;
             PortalField->SetVectorParameterValue(TEXT("Impact"), FLinearColor(
-                FMath::Clamp(.5 + At.Y / (2*PortalHalfWidth),0.,1.),
+                FMath::Clamp(.5 + At.Y / (2*PortalFieldHalfWidth),0.,1.),
                 FMath::Clamp(At.Z / PortalFieldHeight,0.,1.), GetWorld()->GetTimeSeconds(), 1));
         }
         Notice(TEXT("Atravesse a barreira para atacar"));
@@ -1326,15 +1333,15 @@ void AShadowPrototypeHUD::DrawHUD()
         Label(FString::Printf(TEXT("CRÉDITOS  %d"),Mode->GetCredits()),Amber,667,32,18);
 
         const auto Cards = Mode->GetShopOptions(*Player);
-        const TCHAR* Tracks[] = {TEXT("COMBATE"), TEXT("DEFESA"), TEXT("MANUSEIO")};
+        const TCHAR* Tracks[] = {TEXT("COMBATE"), TEXT("DEFESA"), TEXT("MANUSEIO"), TEXT("SUPRIMENTOS")};
         UTexture2D* Icons[] = {ShopAmmoIcon.Get(), ShopReloadIcon.Get(), ShopHealthIcon.Get(), ShopShieldIcon.Get()};
-        UTexture2D* PerkIcons[] = {ShopAmmoIcon.Get(), ShopShieldIcon.Get(), ShopReloadIcon.Get()};
+        UTexture2D* PerkIcons[] = {ShopAmmoIcon.Get(), ShopShieldIcon.Get(), ShopReloadIcon.Get(), ShopHealthIcon.Get()};
         for (int32 Index = 0; Index < Cards.Num(); ++Index)
         {
             const auto& Card = Cards[Index];
-            const float Left = bWorkshop ? 26+Index*277 : 26+(Index%2)*416;
+            const float Left = bWorkshop ? 26+Index*207 : 26+(Index%2)*416;
             const float Top = bWorkshop ? 99 : 99+(Index/2)*104;
-            const float Width = bWorkshop ? 264 : 402;
+            const float Width = bWorkshop ? 198 : 402;
             const float Height = bWorkshop ? 201 : 93;
             const FName CardName(TEXT("ShopCard"), Index + 1);
             const FVector2D At(X+Left*S,Y+Top*S), Size(Width*S,Height*S);
@@ -1343,14 +1350,14 @@ void AShadowPrototypeHUD::DrawHUD()
             Label(FString::FromInt(Index+1),Muted,Left+Width-29,Top+10,14);
             if (bWorkshop)
                 Label(Tracks[Index],Cyan,Left+16,Top+11,15);
-            const float IconX = Left+(bWorkshop ? 104 : 18);
+            const float IconX = Left+(bWorkshop ? (Width-52)/2 : 18);
             const float IconY = Top+(bWorkshop ? 43 : 19);
             if (auto* Icon = bWorkshop ? PerkIcons[Index] : Icons[Index])
                 DrawTextureSimple(Icon,X+IconX*S,Y+IconY*S,52*S/FMath::Max(1,Icon->GetSizeX()));
             const float TextX = Left+(bWorkshop ? 20 : 87);
             const float TextY = Top+(bWorkshop ? 107 : 12);
-            Label(Card.Title,White,TextX,TextY,23,true);
-            Label(Card.Detail,Muted,TextX,TextY+25,15);
+            Label(Card.Title,White,TextX,TextY,bWorkshop ? 21 : 23,true);
+            Label(Card.Detail,Muted,TextX,TextY+25,bWorkshop ? 13 : 15);
             if (Card.Price)
                 Label(FString::Printf(TEXT("%d CR"),Card.Price),Card.bAvailable ? Amber : Muted,TextX,TextY+50,15);
         }
@@ -1360,9 +1367,12 @@ void AShadowPrototypeHUD::DrawHUD()
         DrawButtonSurface(TEXT("ShopBack"),{X+26*S,Y+350*S},{290*S,36*S},bBackHover);
         Label(bWorkshop ? TEXT("VOLTAR À PARTIDA  [E]") : TEXT("VOLTAR  [E]"),White,40,357,16);
         DrawButtonSurface(TEXT("ShopBuy"),{X+578*S,Y+350*S},{267*S,36*S},true,Selected.bAvailable);
+        const bool bSelectedHeal = bWorkshop && Mode->GetShopSelection() == Cards.Num()-1;
         const FString BuyLabel = Selected.bAvailable ? FString::Printf(TEXT("COMPRAR   %d CR"),Selected.Price)
-            : !Selected.Price ? TEXT("NÍVEL MÁXIMO") : Mode->IsWorkshop() && Mode->HasBoughtPerk()
-            ? TEXT("PERK JÁ ADQUIRIDO") : TEXT("CRÉDITOS INSUFICIENTES");
+            : !Selected.Price ? TEXT("NÍVEL MÁXIMO")
+            : bSelectedHeal ? (Mode->GetCredits() < Selected.Price && Player->Health < Player->MaxHealth
+                && !Mode->HasBoughtHeal() ? TEXT("CRÉDITOS INSUFICIENTES") : Selected.Detail.ToUpper())
+            : bWorkshop && Mode->HasBoughtPerk() ? TEXT("PERK JÁ ADQUIRIDO") : TEXT("CRÉDITOS INSUFICIENTES");
         Label(BuyLabel,Selected.bAvailable ? (bBuyHover ? White : Cyan) : Muted,592,356,18);
         if (Selected.bAvailable)
             Label(TEXT("[ENTER]"),Muted,779,359,13);

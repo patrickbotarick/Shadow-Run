@@ -136,6 +136,7 @@ public:
     void MoveShopSelection(int32 X, int32 Y);
     bool IsShopOpen() const { return bShopOpen; }
     bool HasBoughtPerk() const { return bPerkBoughtThisVisit; }
+    bool HasBoughtHeal() const { return bHealBoughtThisVisit; }
     bool HasWorkbench() const { return IsWorkbenchRoom(); }
     FVector GetWorkbenchPosition() const;
     TArray<FShadowShopCard> GetShopOptions(const AShadowRunner& Player) const;
@@ -241,6 +242,7 @@ private:
     UPROPERTY()
     TObjectPtr<AActor> MainMenuCamera;
     bool bPerkBoughtThisVisit = false;
+    bool bHealBoughtThisVisit = false;
     int32 CombatPerks = 0;
     int32 DefensePerks = 0;
     int32 HandlingPerks = 0;
