@@ -36,6 +36,9 @@ namespace
         TWeakObjectPtr<AActor> PreviousCell;
         TWeakObjectPtr<AActor> StagedDrone;
         TWeakObjectPtr<AActor> ShotBarrier;
+        FVector StagedPosition;
+        double DroneCheckDeadline = 0;
+        int32 HealthBeforeDrone = 0;
         const FKey MoveKeys[4] = { EKeys::W, EKeys::S, EKeys::A, EKeys::D };
         const FVector MoveDirections[4] = { FVector(1,0,0), FVector(-1,0,0), FVector(0,-1,0), FVector(0,1,0) };
 
@@ -358,6 +361,7 @@ namespace
                        TEXT("Deposit stages drones and barrier only for upcoming combat rooms"));
                 if (StagedDrone.IsValid() && ShotBarrier.IsValid())
                 {
+                    StagedPosition = StagedDrone->GetActorLocation();
                     const FVector Eye = ShotBarrier->GetActorLocation() - FVector(130,0,28);
                     const FVector Aim = (StagedDrone->GetActorLocation() - Eye).GetSafeNormal();
                     FHitResult Hit;
@@ -371,7 +375,22 @@ namespace
                            TEXT("Hologram blocks shots and staged drones survive"));
                 }
                 Tap(EKeys::E);
+                if (Transitions == 0 && ShotBarrier.IsValid())
+                {
+                    Runner->SetActorLocation(ShotBarrier->GetActorLocation()-FVector(355,0,82));
+                    PC->SetControlRotation(FRotator::ZeroRotator);
+                    Step = 126;
+                    Wait(.65);
+                    break;
+                }
                 Wait(.14);
+                break;
+            case 126:
+                Verify(StagedDrone.IsValid() && FVector::Dist(StagedPosition,StagedDrone->GetActorLocation()) > 20,
+                       TEXT("Preloaded drone patrols behind the barrier"));
+                Capture(TEXT("Shadow_Run-Barreira.png"));
+                Step = 113;
+                Wait(.2);
                 break;
             case 113:
             {
@@ -393,6 +412,21 @@ namespace
                        (StagedDrone.IsValid() && !StagedDrone->ActorHasTag(TEXT("ShadowStagedDrone")))),
                        TEXT("Crossing removes the hologram and promotes the same drone"));
                 Verify(Mode->IsWorkshop() == (Transitions==4), TEXT("Workshop follows three combat rooms"));
+                if (Transitions == 1 && StagedDrone.IsValid())
+                {
+                    const FVector Position = StagedDrone->GetActorLocation();
+                    FCollisionQueryParams Query;
+                    Query.AddIgnoredActor(StagedDrone.Get());
+                    const FCollisionObjectQueryParams StaticGeometry(ECC_WorldStatic);
+                    Verify(!World->OverlapAnyTestByObjectType(Position,FQuat::Identity,StaticGeometry,
+                           FCollisionShape::MakeSphere(70),Query), TEXT("Drone body has clearance from room geometry"));
+                    Runner->SetActorLocation(FVector(Position.X,Position.Y+165,98));
+                    Runner->GetCharacterMovement()->StopMovementImmediately();
+                    HealthBeforeDrone = Runner->Health;
+                    DroneCheckDeadline = FPlatformTime::Seconds()+4;
+                    Step = 127;
+                    break;
+                }
                 if (Transitions < 4)
                 {
                     Step = 110;
@@ -403,6 +437,23 @@ namespace
                 Tap(EKeys::E);
                 Step = 121;
                 Wait(.15);
+                break;
+            case 127:
+                if (Runner->Health == HealthBeforeDrone && FPlatformTime::Seconds() < DroneCheckDeadline)
+                {
+                    Step = 127;
+                    break;
+                }
+                if (StagedDrone.IsValid())
+                {
+                    const FVector ToPlayer = (Runner->GetPawnViewLocation()-StagedDrone->GetActorLocation()).GetSafeNormal();
+                    Verify(Runner->Health < HealthBeforeDrone &&
+                           FVector::DotProduct(StagedDrone->GetActorForwardVector(),ToPlayer) > .97,
+                           TEXT("Drone turns toward the player before firing"));
+                }
+                else
+                    Verify(false,TEXT("Drone remains active during aim check"));
+                Step = 110;
                 break;
             case 121:
                 Verify(Mode->IsShopOpen(), TEXT("E opens transition workshop"));

@@ -31,6 +31,9 @@ namespace
     constexpr float RoomWidth = 1000.f;
     constexpr float PortalHalfWidth = 145.f;
     constexpr float PortalBarrierDepth = 80.f;
+    constexpr float PortalFieldHeight = 204.f;
+    constexpr float DroneRadius = 74.f;
+    constexpr float DroneMeshYaw = 180.f;
     constexpr float WorkshopRise = 144.f;
     constexpr int32 CombatRoomsPerFloor = 3;
     constexpr int32 MagazineSize = 24;
@@ -607,16 +610,26 @@ void AShadowPrototype::StageNextRoom()
     if (Next.Kind != ERoomKind::Cargo && Next.Kind != ERoomKind::Machines)
         return;
 
-    StagedSpawnPoints = {Next.Origin+FVector(680,0,151), Next.Origin+FVector(1015,-120,154),
-                         Next.Origin+FVector(820,285,158)};
-    StagedDrones.SetNum(FMath::Min(3, FloorNumber + (IsWorkshop() ? 1 : 0)));
+    const FVector Candidates[] = {{560,-285,220},{790,325,220},{1130,-320,220},
+                                  {1150,95,220},{465,320,220},{325,-335,220}};
+    for (const FVector& Local : Candidates)
+    {
+        const FVector Point = Next.Origin + Local;
+        if (DronePathClear(Point, Point + FVector(0,0,1)))
+            StagedSpawnPoints.Add(Point);
+    }
+    StagedDrones.SetNum(FMath::Min(StagedSpawnPoints.Num(), FMath::Min(3, FloorNumber + (IsWorkshop() ? 1 : 0))));
     for (int32 Index = 0; Index < StagedDrones.Num(); ++Index)
     {
         SpawnDrone(StagedDrones[Index], StagedSpawnPoints[Index]);
         StagedDrones[Index].Actor->Tags.Add(TEXT("ShadowStagedDrone"));
     }
 
-    const FVector Plane = Next.Origin + FVector(PortalBarrierDepth,0,0);
+    BuildPortalBarrier(Next.Origin + FVector(PortalBarrierDepth,0,0));
+}
+
+void AShadowPrototype::BuildPortalBarrier(const FVector& Plane)
+{
     auto* Blocker = Block(GetWorld(), Plane+FVector(0,0,180), FVector(4,RoomWidth+24,360));
     auto* Collision = Blocker->GetStaticMeshComponent();
     Collision->SetVisibility(false);
@@ -627,17 +640,34 @@ void AShadowPrototype::StageNextRoom()
     PortalShotBlocker = Blocker;
     PortalBarrier.Add(Blocker);
 
+    PortalPlane = Plane;
+    auto* Quad = Asset<UStaticMesh>(TEXT("/Game/ShadowRun/VFX/Malhas/SM_VFX_Quad.SM_VFX_Quad"));
+    auto* FieldMaterial = Asset<UMaterialInterface>(TEXT("/Game/ShadowRun/VFX/M_PortalField.M_PortalField"));
+    if (Quad && FieldMaterial)
+    {
+        auto* Field = Block(GetWorld(), Plane, FVector(PortalFieldHeight,2*PortalHalfWidth,1), Quad);
+        Field->SetActorEnableCollision(false);
+        Field->SetActorRotation(FRotator(90,0,0));
+        Field->SetActorLocation(Plane+FVector(0,0,PortalFieldHeight/2) -
+            Field->GetActorRotation().RotateVector(Quad->GetBoundingBox().GetCenter() * Field->GetActorScale3D()));
+        Field->GetStaticMeshComponent()->SetCastShadow(false);
+        PortalField = Field->GetStaticMeshComponent()->CreateDynamicMaterialInstance(0, FieldMaterial);
+        PortalBarrier.Add(Field);
+    }
+    auto* Trim = Asset<UMaterialInterface>(TEXT("/Game/ShadowRun/Sector/M_SectorTrim.M_SectorTrim"));
     auto* CyanSurface = Asset<UMaterialInterface>(TEXT("/Game/ShadowRun/Sector/M_SectorCyan.M_SectorCyan"));
-    auto AddLightStrip = [&](FVector At, FVector Size) {
-        auto* Strip = Block(GetWorld(), Plane+At, Size);
-        Strip->SetActorEnableCollision(false);
-        Strip->GetStaticMeshComponent()->SetMaterial(0, CyanSurface);
-        PortalBarrier.Add(Strip);
-    };
     for (float Side : {-1.f, 1.f})
-        AddLightStrip(FVector(0,Side*(PortalHalfWidth-4),104), FVector(3,4,207));
-    for (int32 Line = 0; Line <= 8; ++Line)
-        AddLightStrip(FVector(0,0,5+Line*25), FVector(2,2*PortalHalfWidth-8,Line == 0 || Line == 8 ? 3 : 1));
+    {
+        const double Y = Side*(PortalHalfWidth+6);
+        auto* Emitter = Block(GetWorld(), Plane+FVector(0,Y,102), FVector(26,17,204));
+        Emitter->SetActorEnableCollision(false);
+        Emitter->GetStaticMeshComponent()->SetMaterial(0, Trim);
+        PortalBarrier.Add(Emitter);
+        auto* Core = Block(GetWorld(), Plane+FVector(-14,Y,102), FVector(4,5,174));
+        Core->SetActorEnableCollision(false);
+        Core->GetStaticMeshComponent()->SetMaterial(0, CyanSurface);
+        PortalBarrier.Add(Core);
+    }
     auto* Sign = GetWorld()->SpawnActor<AActor>();
     auto* Text = NewObject<UTextRenderComponent>(Sign);
     Sign->SetRootComponent(Text);
@@ -647,7 +677,7 @@ void AShadowPrototype::StageNextRoom()
     Text->SetWorldSize(13.f);
     Text->SetCollisionEnabled(ECollisionEnabled::NoCollision);
     Text->RegisterComponent();
-    Sign->SetActorLocationAndRotation(Plane+FVector(-7,0,185), FRotator(0,180,0));
+    Sign->SetActorLocationAndRotation(Plane+FVector(-12,0,220), FRotator(0,180,0));
     PortalBarrier.Add(Sign);
 }
 
@@ -688,6 +718,7 @@ void AShadowPrototype::AdvanceRoom()
         Part->Destroy();
     PortalBarrier.Reset();
     PortalShotBlocker = nullptr;
+    PortalField = nullptr;
     ShotActors.Reset();
     Current = MoveTemp(Next);
     auto* RearSeal = Block(GetWorld(),Current.Origin+FVector(11,0,180),FVector(22,2*PortalHalfWidth+2,360));
@@ -721,45 +752,129 @@ void AShadowPrototype::BuildPickups()
 }
 void AShadowPrototype::SpawnDrone(FDrone& Drone, const FVector& Point)
 {
-    Drone.Actor = Block(GetWorld(),Point,FVector(118,113,70),Model(TEXT("sci-fi_drone_3d_model")));
-    Drone.Actor->SetActorEnableCollision(false);
+    Drone.Actor = GetWorld()->SpawnActor<AActor>(Point, FRotator(0,180,0));
+    Drone.Actor->Tags.Add(TEXT("ShadowDrone"));
     auto* Body = NewObject<UCapsuleComponent>(Drone.Actor);
+    Drone.Actor->SetRootComponent(Body);
     Body->InitCapsuleSize(58,60);
     Body->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
     Body->SetCollisionResponseToAllChannels(ECR_Ignore);
     Body->SetCollisionResponseToChannel(ECC_Visibility,ECR_Block);
-    Body->SetupAttachment(Drone.Actor->GetRootComponent());
-    Body->SetAbsolute(false,false,true);
     Body->RegisterComponent();
     Body->SetWorldLocation(Point);
-    Drone.Actor->SetActorEnableCollision(true);
-    CastChecked<AStaticMeshActor>(Drone.Actor)->GetStaticMeshComponent()->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+    Body->SetWorldRotation(FRotator(0,180,0));
+    auto* Visual = NewObject<UStaticMeshComponent>(Drone.Actor);
+    auto* Mesh = Model(TEXT("sci-fi_drone_3d_model"));
+    Visual->SetupAttachment(Body);
+    Visual->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+    Visual->SetStaticMesh(Mesh ? Mesh : Cube());
+    const FBox Bounds = Visual->GetStaticMesh()->GetBoundingBox();
+    const FVector Scale = FVector(118,113,70) / Bounds.GetSize().ComponentMax(FVector(1));
+    const FRotator MeshFacing(0,DroneMeshYaw,0);
+    Visual->SetRelativeTransform(FTransform(MeshFacing, -MeshFacing.RotateVector(Bounds.GetCenter()*Scale), Scale));
+    Visual->RegisterComponent();
     auto* Signal = NewObject<UPointLightComponent>(Drone.Actor);
     Signal->SetupAttachment(Drone.Actor->GetRootComponent());
     Signal->RegisterComponent();
     Signal->SetLightColor(FLinearColor(1.f,.04f,.03f));
     Signal->SetIntensity(1700);
     Signal->SetAttenuationRadius(230);
-    Drone.PatrolOrigin = Drone.Actor->GetActorLocation();
+    Drone.Signal = Signal;
+    Drone.PatrolOrigin = Point;
+    Drone.PatrolTarget = Point;
+    Drone.NextPatrol = 0;
+    Drone.AimStarted = 0;
+    Drone.bTracking = false;
     Drone.DamageTaken = 0.f;
     Drone.NextAttack = GetWorld()->GetTimeSeconds()+1.3;
     Drone.RespawnAt = 0;
 }
 
-bool AShadowPrototype::CanSee(const FVector& From, const AActor& Target, const AActor* Ignore) const
+bool AShadowPrototype::DronePathClear(const FVector& From, const FVector& To, const AActor* Drone, const AActor* Player) const
+{
+    FCollisionQueryParams Query;
+    Query.AddIgnoredActor(Drone);
+    Query.AddIgnoredActor(Player);
+    return !GetWorld()->SweepTestByChannel(From, To, FQuat::Identity, ECC_Visibility,
+                                           FCollisionShape::MakeSphere(DroneRadius), Query);
+}
+
+bool AShadowPrototype::DroneHasShot(const FVector& From, const FVector& To, const AShadowRunner& Player, const AActor* Drone) const
 {
     FHitResult Hit;
     FCollisionQueryParams Query;
-    Query.AddIgnoredActor(Ignore);
-    return !GetWorld()->LineTraceSingleByChannel(Hit,From,Target.GetActorLocation(),ECC_Visibility,Query)
-        || Hit.GetActor() == &Target;
+    Query.AddIgnoredActor(Drone);
+    return !GetWorld()->LineTraceSingleByChannel(Hit,From,To,ECC_Visibility,Query) || Hit.GetActor() == &Player;
+}
+
+void AShadowPrototype::UpdateDroneFlight(FDrone& Drone, const FRoom& Room, const AShadowRunner& Player, double Now,
+                                        float DeltaSeconds, bool bTrackPlayer)
+{
+    const FVector Position = Drone.Actor->GetActorLocation();
+    const FVector ToPlayer = Player.GetPawnViewLocation() - Position;
+    const FVector Direction = ToPlayer.GetSafeNormal2D();
+    auto InsideRoom = [&Room](FVector Point) {
+        Point.X = FMath::Clamp(Point.X, Room.Origin.X+180, Room.Origin.X+RoomLength-110);
+        Point.Y = FMath::Clamp(Point.Y, Room.Origin.Y-420, Room.Origin.Y+420);
+        Point.Z = Room.Origin.Z + 226;
+        return Point;
+    };
+    if (Now >= Drone.NextPatrol || FVector::DistSquared2D(Position,Drone.PatrolTarget) < FMath::Square(22.f))
+    {
+        Drone.NextPatrol = Now + 2;
+        const float Side = FMath::Sin(Now+Drone.PatrolOrigin.Y) > 0 ? 1.f : -1.f;
+        const FVector Offsets[] = {{90,Side*125,0},{-100,Side*120,0},{75,-Side*130,0},
+                                   {-80,-Side*125,0},{150,0,0},{-140,0,0}};
+        for (const FVector& Offset : Offsets)
+        {
+            const FVector Candidate = InsideRoom(Drone.PatrolOrigin+Offset);
+            if (FVector::DistSquared2D(Position,Candidate)>FMath::Square(45.f) &&
+                DronePathClear(Position,Candidate,Drone.Actor,&Player))
+            {
+                Drone.PatrolTarget = Candidate;
+                break;
+            }
+        }
+    }
+    FVector Desired = Drone.PatrolTarget;
+    if (bTrackPlayer)
+    {
+        const FVector Side = FVector::CrossProduct(FVector::UpVector, Direction);
+        const float Strafe = FMath::Sin(Now * 1.55 + Drone.PatrolOrigin.Y) >= 0 ? 105.f : -105.f;
+        const float Distance = ToPlayer.Size2D();
+        const float Approach = FMath::Clamp(Distance-460.f,-100.f,125.f);
+        for (const FVector& Offset : {Direction*Approach+Side*Strafe, Side*-Strafe, Direction*Approach})
+        {
+            const FVector Candidate = InsideRoom(Position+Offset);
+            if (DronePathClear(Position,Candidate,Drone.Actor,&Player))
+            {
+                Desired = Candidate;
+                break;
+            }
+        }
+    }
+    Desired.Z += 10.f*FMath::Sin(Now*2.7+Drone.PatrolOrigin.Y);
+    const FVector NextPosition = FMath::VInterpConstantTo(Position,Desired,DeltaSeconds,bTrackPlayer ? 140.f : 105.f);
+    if (DronePathClear(Position,NextPosition,Drone.Actor,&Player))
+        Drone.Actor->SetActorLocation(NextPosition);
+    else
+        Drone.NextPatrol = 0;
+
+    const FVector Facing = bTrackPlayer ? ToPlayer : Desired - Position;
+    if (Facing.SizeSquared2D() > 16)
+    {
+        FRotator Aim = Facing.Rotation();
+        Aim.Pitch = bTrackPlayer ? FMath::ClampAngle(Aim.Pitch,-60,60) : 0.f;
+        Drone.Actor->SetActorRotation(FMath::RInterpConstantTo(Drone.Actor->GetActorRotation(),Aim,DeltaSeconds,185.f));
+    }
 }
 
 void AShadowPrototype::UpdateDrones(AShadowRunner& Player, double Now, float DeltaSeconds)
 {
-    FVector Eye;
-    FRotator Look;
-    Player.GetActorEyesViewPoint(Eye,Look);
+    const FVector Eye = Player.GetPawnViewLocation();
+    const FVector Look = Player.GetViewRotation().Vector();
+    for (auto& Drone : StagedDrones)
+        UpdateDroneFlight(Drone,Next,Player,Now,DeltaSeconds,false);
     for (auto& Drone : Drones)
     {
         if (!Drone.Actor)
@@ -768,7 +883,8 @@ void AShadowPrototype::UpdateDrones(AShadowRunner& Player, double Now, float Del
                 continue;
             for (const FVector& Point : SpawnPoints)
             {
-                if (FVector::DistSquared(Point,Eye) < FMath::Square(850.f) ||
+                if (FVector::DistSquared(Point,Eye) < FMath::Square(650.f) ||
+                    !DronePathClear(Point,Point+FVector(0,0,1),nullptr,&Player) ||
                     Drones.ContainsByPredicate([&Point](const FDrone& Other) {
                         return Other.Actor && FVector::DistSquared(Point,Other.PatrolOrigin)<FMath::Square(180.f);
                     }))
@@ -777,7 +893,7 @@ void AShadowPrototype::UpdateDrones(AShadowRunner& Player, double Now, float Del
                 FHitResult Hit;
                 FCollisionQueryParams Query;
                 Query.AddIgnoredActor(&Player);
-                if (FVector::DotProduct(Look.Vector(),(Point-Eye).GetSafeNormal()) > .45 &&
+                if (FVector::DotProduct(Look,(Point-Eye).GetSafeNormal()) > .05 &&
                     !GetWorld()->LineTraceSingleByChannel(Hit,Eye,Point,ECC_Visibility,Query))
                     continue;
                 SpawnDrone(Drone,Point);
@@ -790,32 +906,26 @@ void AShadowPrototype::UpdateDrones(AShadowRunner& Player, double Now, float Del
 
         const FVector Position = Drone.Actor->GetActorLocation();
         const float Distance = FVector::Dist(Position,Eye);
-        const bool bDetect = Distance<920 && CanSee(Position,Player,Drone.Actor);
-        FVector Desired = Drone.PatrolOrigin + FVector(0,130*FMath::Sin(Now*.75),12*FMath::Sin(Now*2));
-        if (bDetect)
+        const bool bDetect = Distance < 920 && DroneHasShot(Position,Eye,Player,Drone.Actor);
+        if (bDetect && !Drone.bTracking)
         {
-            const FVector Direction = (Player.GetActorLocation()-Position).GetSafeNormal2D();
-            if (Distance>450)
-                Desired = Position+Direction*115;
-            Desired.X = FMath::Clamp(Desired.X, Current.Origin.X+115, Current.Origin.X+RoomLength-115);
-            Desired.Y = FMath::Clamp(Desired.Y, Current.Origin.Y-440, Current.Origin.Y+440);
-
-            if (Distance<670 && Now>=Drone.NextAttack)
-            {
-                Drone.NextAttack = Now+1.8;
-                const FVector Emitter = Position + (Eye - Position).GetSafeNormal() * 52.f;
-                ShotEffects(Emitter, Eye, true, false);
-                Sound(TEXT("SFX_SR_Drone_Ataque"),.45f);
-                Player.HitByDrone(15);
-            }
+            Drone.AimStarted = Now;
+            Sound(TEXT("SFX_SR_Drone_Detectou"),.32f);
         }
-        const FVector NextPosition = FMath::VInterpConstantTo(Position,Desired,DeltaSeconds,105);
-        FHitResult Obstacle;
-        FCollisionQueryParams Query;
-        Query.AddIgnoredActor(Drone.Actor);
-        Query.AddIgnoredActor(&Player);
-        if (!GetWorld()->LineTraceSingleByChannel(Obstacle,Position,NextPosition,ECC_Visibility,Query))
-            Drone.Actor->SetActorLocation(NextPosition);
+        Drone.bTracking = bDetect;
+        UpdateDroneFlight(Drone,Current,Player,Now,DeltaSeconds,bDetect);
+        Drone.Signal->SetIntensity(bDetect ? 2600+1050*FMath::Sin(Now*12) : 1150);
+        const FVector Forward = Drone.Actor->GetActorForwardVector();
+        const FVector Emitter = Drone.Actor->GetActorLocation()+Forward*59;
+        const FVector Aim = (Eye - Emitter).GetSafeNormal();
+        if (bDetect && Distance < 670 && Now >= Drone.NextAttack && Now >= Drone.AimStarted+.42 &&
+            FVector::DotProduct(Forward,Aim) >= .985 && DroneHasShot(Emitter,Eye,Player,Drone.Actor))
+        {
+            Drone.NextAttack = Now+1.8;
+            ShotEffects(Emitter,Eye,true,false);
+            Sound(TEXT("SFX_SR_Drone_Ataque"),.45f);
+            Player.HitByDrone(15);
+        }
         if (bFinished)
             return;
     }
@@ -832,6 +942,8 @@ void AShadowPrototype::Tick(float DeltaSeconds)
     if (IsShopOpen() && FVector::DistSquared(Player->GetActorLocation(), GetWorkbenchPosition()) > FMath::Square(210.f))
         CloseShop();
     const double Now = GetWorld()->GetTimeSeconds();
+    if (PortalField)
+        PortalField->SetScalarParameterValue(TEXT("FieldTime"),Now);
     if (IsValid(CarbinePickup) && FVector::DistSquared(Player->GetActorLocation(),CarbinePickup->GetActorLocation()) < FMath::Square(100.f))
     {
         Player->CollectCarbine();
@@ -969,7 +1081,16 @@ void AShadowPrototype::Fire(AShadowRunner& Player, const FVector& Origin, const 
                                        TEXT("SFX_SR_Tiro_Carabina_03")};
     Sound(ShotSounds[FMath::RandRange(0, 2)], Player.HasPistolEquipped() ? .34f : .48f);
     if (bBarrierHit)
+    {
+        if (PortalField)
+        {
+            const FVector At = Hit.ImpactPoint - PortalPlane;
+            PortalField->SetVectorParameterValue(TEXT("Impact"), FLinearColor(
+                FMath::Clamp(.5 + At.Y / (2*PortalHalfWidth),0.,1.),
+                FMath::Clamp(At.Z / PortalFieldHeight,0.,1.), GetWorld()->GetTimeSeconds(), 1));
+        }
         Notice(TEXT("Atravesse a barreira para atacar"));
+    }
     if (!Hit.bBlockingHit)
         return;
     for (auto& Drone : Drones)

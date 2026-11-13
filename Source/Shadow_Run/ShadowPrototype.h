@@ -8,6 +8,7 @@
 #include "ShadowPrototype.generated.h"
 
 class UCameraComponent;
+class UMaterialInstanceDynamic;
 class UPointLightComponent;
 class UStaticMeshComponent;
 class USoundBase;
@@ -181,7 +182,12 @@ private:
     struct FDrone
     {
         AActor* Actor = nullptr;
+        UPointLightComponent* Signal = nullptr;
         FVector PatrolOrigin = FVector::ZeroVector;
+        FVector PatrolTarget = FVector::ZeroVector;
+        double NextPatrol = 0;
+        double AimStarted = 0;
+        bool bTracking = false;
         float DamageTaken = 0.f;
         bool bRewarded = false;
         double NextAttack = 0;
@@ -202,11 +208,16 @@ private:
     void ActivateRoom();
     void PrepareNextRoom();
     void StageNextRoom();
+    void BuildPortalBarrier(const FVector& Plane);
     void AdvanceRoom();
     void BuildPickups();
     void SpawnDrone(FDrone& Drone, const FVector& Point);
+    void UpdateDroneFlight(FDrone& Drone, const FRoom& Room, const AShadowRunner& Player, double Now,
+                           float DeltaSeconds, bool bTrackPlayer);
     void UpdateDrones(AShadowRunner& Player, double Now, float DeltaSeconds);
-    bool CanSee(const FVector& From, const AActor& Target, const AActor* Ignore) const;
+    bool DronePathClear(const FVector& From, const FVector& To, const AActor* Drone = nullptr,
+                        const AActor* Player = nullptr) const;
+    bool DroneHasShot(const FVector& From, const FVector& To, const AShadowRunner& Player, const AActor* Drone) const;
     void Notice(const TCHAR* Text);
     void LoadProfile();
     bool SaveProfile();
@@ -241,6 +252,9 @@ private:
     TArray<FVector> StagedSpawnPoints;
     TArray<AActor*> PortalBarrier;
     AActor* PortalShotBlocker = nullptr;
+    UPROPERTY()
+    TObjectPtr<UMaterialInstanceDynamic> PortalField;
+    FVector PortalPlane = FVector::ZeroVector;
     bool bNextStaged = false;
     TArray<TWeakObjectPtr<AActor>> ShotActors;
     FRoom Current;
