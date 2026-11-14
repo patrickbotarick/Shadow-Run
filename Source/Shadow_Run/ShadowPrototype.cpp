@@ -14,6 +14,7 @@
 #include "Engine/PointLight.h"
 #include "Engine/StaticMeshActor.h"
 #include "Engine/Texture2D.h"
+#include "EngineUtils.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/PlayerController.h"
 #include "Kismet/GameplayStatics.h"
@@ -38,7 +39,6 @@ namespace
     constexpr float DroneRadius = 74.f;
     constexpr float DroneMeshYaw = 180.f;
     constexpr float WorkshopRise = 144.f;
-    constexpr int32 CombatRoomsPerFloor = 3;
     constexpr int32 MagazineSize = 24;
     constexpr int32 ReserveLimit = 96;
     constexpr float ReloadDuration = 1.38f;
@@ -398,8 +398,43 @@ void AShadowPrototype::StartPlay()
     int32 Seed = FMath::Rand();
     FParse::Value(FCommandLine::Get(), TEXT("ShadowSeed="), Seed);
     RoomRandom.Initialize(Seed);
+    FString RequestedDebugModule;
+    FString RequestedDebugVariant;
+    const bool bHasDebugModule = FParse::Value(FCommandLine::Get(), TEXT("ShadowDebugModule="), RequestedDebugModule);
+    const bool bHasDebugVariant = FParse::Value(FCommandLine::Get(), TEXT("ShadowDebugVariant="), RequestedDebugVariant);
+    bDebugModuleRequested = bHasDebugModule || bHasDebugVariant;
+    if (bDebugModuleRequested)
+    {
+        bDebugModuleValid = bHasDebugModule && bHasDebugVariant;
+        DebugModuleName = RequestedDebugModule;
+        if (RequestedDebugModule == TEXT("Combat.Cargo")) DebugRoomKind = ERoomKind::Cargo;
+        else if (RequestedDebugModule == TEXT("Combat.MachineRing")) DebugRoomKind = ERoomKind::Machines;
+        else if (RequestedDebugModule == TEXT("Combat.Crossroads")) DebugRoomKind = ERoomKind::Crossroads;
+        else if (RequestedDebugModule == TEXT("Combat.Substation")) DebugRoomKind = ERoomKind::Substation;
+        else if (RequestedDebugModule == TEXT("Combat.Drainage")) DebugRoomKind = ERoomKind::Drainage;
+        else if (RequestedDebugModule == TEXT("Combat.DoubleGallery")) DebugRoomKind = ERoomKind::DoubleGallery;
+        else bDebugModuleValid = false;
+
+        if (RequestedDebugVariant == TEXT("A")) DebugVariant = 0;
+        else if (RequestedDebugVariant == TEXT("B")) DebugVariant = 1;
+        else bDebugModuleValid = false;
+
+        UE_LOG(LogTemp, Display, TEXT("SHADOW_DEBUG_REQUEST module=%s variant=%s valid=%d"),
+            *RequestedDebugModule, *RequestedDebugVariant, bDebugModuleValid);
+        if (!bDebugModuleValid)
+            UE_LOG(LogTemp, Error, TEXT("SHADOW_DEBUG_INVALID module=%s variant=%s; directed selection disabled and test must fail"),
+                *RequestedDebugModule, *RequestedDebugVariant);
+    }
+    if (GConfig)
+        GConfig->GetInt(TEXT("ShadowRun.Rooms"), TEXT("CombatRoomsPerFloor"), CombatRoomsPerFloorSetting, GGameIni);
+    CombatRoomsPerFloorSetting = FMath::Clamp(CombatRoomsPerFloorSetting, 1, 6);
+    Current.CellsNeeded = CellsForRoom(Current.Kind, FloorNumber);
+    Current.Variant = 0;
+    ConfigureRoom(Current);
     BuildRoom(Current);
     ActivateRoom();
+    if (FParse::Param(FCommandLine::Get(), TEXT("ShadowValidateModule")) && bDebugModuleRequested)
+        ValidateDebugModule(Next);
     Super::StartPlay();
     if (auto* PC = GetWorld()->GetFirstPlayerController())
     {
@@ -426,6 +461,215 @@ void AShadowPrototype::StartPlay()
 #if WITH_EDITOR
     StartShadowControlsCheck(*this);
 #endif
+}
+
+bool AShadowPrototype::IsCombatRoom(ERoomKind Kind) const
+{
+    return Kind != ERoomKind::Reception && Kind != ERoomKind::Workshop;
+}
+
+AShadowPrototype::ERoomKind AShadowPrototype::SelectCombatRoomKind()
+{
+    if (bDebugModuleRequested && !bDebugModuleConsumed && bDebugModuleValid)
+        return DebugRoomKind;
+    const ERoomKind Kinds[] = {ERoomKind::Cargo, ERoomKind::Machines, ERoomKind::Crossroads,
+                               ERoomKind::Substation, ERoomKind::Drainage, ERoomKind::DoubleGallery};
+    int32 Index = RoomRandom.RandRange(0, UE_ARRAY_COUNT(Kinds)-1);
+    if (IsCombatRoom(Current.Kind) && Kinds[Index] == Current.Kind)
+        Index = (Index + 1) % UE_ARRAY_COUNT(Kinds);
+    return Kinds[Index];
+}
+
+void AShadowPrototype::ConfigureRoom(FRoom& Room) const
+{
+    Room.ModuleId = NAME_None;
+    Room.EntryTransform = FTransform(FRotator::ZeroRotator, FVector(0,0,98));
+    Room.ExitTransforms.Reset();
+    Room.CellSpawnPoints.Reset();
+    Room.DroneSpawnPoints.Reset();
+    Room.Occupancy = FBox(FVector(0,-520,0), FVector(RoomLength,520,378));
+
+    const float ExitValues[] = {-260.f, 0.f, 260.f};
+    for (const float Exit : ExitValues)
+        Room.ExitTransforms.Add(FTransform(FRotator::ZeroRotator, FVector(RoomLength,Exit,0)));
+
+    switch (Room.Kind)
+    {
+    case ERoomKind::Reception:
+        Room.ModuleId = TEXT("Reception.Fixed");
+        Room.ExitTransforms.SetNum(1);
+        Room.ExitTransforms[0] = FTransform(FRotator::ZeroRotator, FVector(RoomLength,0,0));
+        Room.CellSpawnPoints = {FVector(640,0,49)};
+        break;
+    case ERoomKind::Cargo:
+        Room.ModuleId = Room.Variant == 0 ? TEXT("Combat.Depot.A") : TEXT("Combat.Depot.B");
+        Room.CellSpawnPoints = Room.Variant == 0
+            ? TArray<FVector>{{565,-300,49},{850,275,49},{1160,-225,49}}
+            : TArray<FVector>{{500,260,49},{760,-280,49},{1130,210,49}};
+        Room.DroneSpawnPoints = {{560,-285,220},{790,325,220},{1130,-320,220},{1150,95,220}};
+        break;
+    case ERoomKind::Machines:
+        Room.ModuleId = Room.Variant == 0 ? TEXT("Combat.MachineRing.A") : TEXT("Combat.MachineRing.B");
+        Room.CellSpawnPoints = Room.Variant == 0
+            ? TArray<FVector>{{520,-300,49},{780,300,49},{1120,-230,49}}
+            : TArray<FVector>{{500,270,49},{760,-300,49},{1120,210,49}};
+        Room.DroneSpawnPoints = {{500,300,220},{760,-300,220},{1030,300,220},{1160,-120,220}};
+        break;
+    case ERoomKind::Crossroads:
+        Room.ModuleId = Room.Variant == 0 ? TEXT("Combat.Crossroads.A") : TEXT("Combat.Crossroads.B");
+        Room.CellSpawnPoints = Room.Variant == 0
+            ? TArray<FVector>{{470,-300,49},{720,0,49},{1060,300,49}}
+            : TArray<FVector>{{500,300,49},{760,0,49},{1100,-300,49}};
+        Room.DroneSpawnPoints = {{470,-300,220},{700,300,220},{930,-300,220},{1160,300,220}};
+        break;
+    case ERoomKind::Substation:
+        Room.ModuleId = Room.Variant == 0 ? TEXT("Combat.Substation.A") : TEXT("Combat.Substation.B");
+        Room.CellSpawnPoints = Room.Variant == 0
+            ? TArray<FVector>{{500,-300,49},{820,260,79},{1110,-210,49}}
+            : TArray<FVector>{{520,270,49},{800,-260,79},{1120,230,49}};
+        Room.DroneSpawnPoints = {{500,280,220},{760,-300,250},{1000,280,220},{1160,-220,220}};
+        break;
+    case ERoomKind::Drainage:
+        Room.ModuleId = Room.Variant == 0 ? TEXT("Combat.Drainage.A") : TEXT("Combat.Drainage.B");
+        Room.CellSpawnPoints = Room.Variant == 0
+            ? TArray<FVector>{{470,-300,49},{760,240,49},{1090,-260,49}}
+            : TArray<FVector>{{500,280,49},{780,-230,49},{1130,260,49}};
+        Room.DroneSpawnPoints = {{450,-300,220},{700,300,220},{950,-300,220},{1160,250,220}};
+        break;
+    case ERoomKind::DoubleGallery:
+        Room.ModuleId = Room.Variant == 0 ? TEXT("Combat.DoubleGallery.A") : TEXT("Combat.DoubleGallery.B");
+        Room.CellSpawnPoints = Room.Variant == 0
+            ? TArray<FVector>{{470,-300,49},{820,300,49},{1110,-260,49}}
+            : TArray<FVector>{{500,300,49},{800,-300,49},{1140,260,49}};
+        Room.DroneSpawnPoints = {{470,300,220},{700,-300,220},{960,300,220},{1160,-250,220}};
+        break;
+    case ERoomKind::Workshop:
+        Room.ModuleId = TEXT("Workshop.Transition");
+        Room.ExitTransforms.SetNum(1);
+        Room.ExitTransforms[0] = FTransform(FRotator::ZeroRotator, FVector(RoomLength,0,WorkshopRise));
+        break;
+    }
+}
+
+bool AShadowPrototype::ValidateRoomPlacement(const FRoom& Candidate) const
+{
+    if (!Candidate.Occupancy.IsValid)
+        return false;
+    const FBox CandidateBounds = Candidate.Occupancy.ShiftBy(Candidate.Origin + FVector(1,0,0));
+    if (!Current.Occupancy.IsValid)
+        return true;
+    return !Current.Occupancy.ShiftBy(Current.Origin).Intersect(CandidateBounds);
+}
+
+void AShadowPrototype::ValidateDebugModule(const FRoom& Room) const
+{
+    UWorld* World = GetWorld();
+    const ACharacter* Character = Cast<ACharacter>(DefaultPawnClass ? DefaultPawnClass->GetDefaultObject() : nullptr);
+    const UCapsuleComponent* Capsule = Character ? Character->GetCapsuleComponent() : nullptr;
+    if (!World || !Capsule || Room.ModuleId.IsNone())
+    {
+        UE_LOG(LogTemp, Error, TEXT("SHADOW_MODULE_VALIDATION result=FAIL reason=missing_world_capsule_or_module"));
+        return;
+    }
+
+    const float Radius = Capsule->GetScaledCapsuleRadius();
+    const float HalfHeight = Capsule->GetScaledCapsuleHalfHeight();
+    TArray<UPrimitiveComponent*> Obstacles;
+    for (TActorIterator<AActor> It(World); It; ++It)
+    {
+        AActor* Actor = *It;
+        if (!Actor || Actor == Room.Door || !Actor->GetRootComponent()) continue;
+        const FVector P = Actor->GetActorLocation();
+        if (P.X >= Room.Origin.X-40 && P.X <= Room.Origin.X+RoomLength+40 &&
+            P.Y >= Room.Origin.Y-540 && P.Y <= Room.Origin.Y+540)
+        {
+            TArray<UPrimitiveComponent*> Primitives;
+            Actor->GetComponents<UPrimitiveComponent>(Primitives);
+            for (UPrimitiveComponent* Primitive : Primitives)
+                if (Primitive && Primitive->IsRegistered() && Primitive->IsQueryCollisionEnabled())
+                    Obstacles.Add(Primitive);
+        }
+    }
+
+    auto Walkable = [&](const FVector& P, const AActor* IgnoreActor = nullptr)
+    {
+        FCollisionQueryParams Q(SCENE_QUERY_STAT(ShadowModuleValidation), false);
+        if (IgnoreActor) Q.AddIgnoredActor(IgnoreActor);
+        FCollisionShape Shape = FCollisionShape::MakeCapsule(Radius, HalfHeight);
+        FHitResult Hit;
+        const FVector Raised = P + FVector(0,0,HalfHeight+2.f);
+        return !World->SweepSingleByChannel(Hit, Raised, Raised, FQuat::Identity, ECC_Pawn, Shape, Q);
+    };
+
+    const float Step = FMath::Max(32.f, Radius*0.8f);
+    const int32 NX = FMath::CeilToInt(RoomLength/Step);
+    const int32 NY = FMath::CeilToInt(1000.f/Step);
+    TArray<uint8> Seen; Seen.SetNumZeroed((NX+1)*(NY+1));
+    auto Index = [&](int32 X,int32 Y){ return X*(NY+1)+Y; };
+    auto Point = [&](int32 X,int32 Y){ return Room.Origin + FVector(FMath::Min(X*Step,RoomLength),-500.f+FMath::Min(Y*Step,1000.f),0); };
+    TArray<FIntPoint> Queue;
+    const int32 SX=FMath::Clamp(FMath::RoundToInt(180.f/Step),0,NX), SY=FMath::Clamp(FMath::RoundToInt(500.f/Step),0,NY);
+    if (Walkable(Point(SX,SY))) { Queue.Add(FIntPoint(SX,SY)); Seen[Index(SX,SY)]=1; }
+    for(int32 Head=0; Head<Queue.Num(); ++Head)
+    {
+        const FIntPoint C=Queue[Head];
+        const FIntPoint Dirs[]={FIntPoint(1,0),FIntPoint(-1,0),FIntPoint(0,1),FIntPoint(0,-1)};
+        for(const FIntPoint D:Dirs)
+        {
+            const int32 X=C.X+D.X,Y=C.Y+D.Y;
+            if(X<0||X>NX||Y<0||Y>NY||Seen[Index(X,Y)]) continue;
+            if(Walkable(Point(X,Y))) { Seen[Index(X,Y)]=1; Queue.Add(FIntPoint(X,Y)); }
+        }
+    }
+    auto Reachable = [&](const FVector& Goal)
+    {
+        const int32 X=FMath::Clamp(FMath::RoundToInt((Goal.X-Room.Origin.X)/Step),0,NX);
+        const int32 Y=FMath::Clamp(FMath::RoundToInt((Goal.Y-Room.Origin.Y+500.f)/Step),0,NY);
+        for(int32 DX=-1;DX<=1;++DX) for(int32 DY=-1;DY<=1;++DY)
+        { int32 AX=X+DX,AY=Y+DY; if(AX>=0&&AX<=NX&&AY>=0&&AY<=NY&&Seen[Index(AX,AY)]) return true; }
+        return false;
+    };
+    const FVector EntryPoint=Room.Origin+Room.EntryTransform.GetLocation();
+    const FVector Terminal=Room.Origin+FVector(1100,300,64);
+    int32 ReachableCells=0;
+    for(const FVector& Cell:Room.CellSpawnPoints) if(Reachable(Room.Origin+Cell)) ++ReachableCells;
+    const bool bTerminal=Reachable(Terminal);
+    const bool bExit=Reachable(Room.Origin+FVector(RoomLength-100,Room.ExitY,0));
+    int32 Suspicious=0;
+    for(int32 I=0;I<Obstacles.Num();++I) for(int32 J=I+1;J<Obstacles.Num();++J)
+    {
+        const FBox A=Obstacles[I]->Bounds.GetBox(), B=Obstacles[J]->Bounds.GetBox();
+        if(A.Intersect(B))
+        {
+            const FVector OverlapMin(FMath::Max(A.Min.X,B.Min.X),FMath::Max(A.Min.Y,B.Min.Y),FMath::Max(A.Min.Z,B.Min.Z));
+            const FVector OverlapMax(FMath::Min(A.Max.X,B.Max.X),FMath::Min(A.Max.Y,B.Max.Y),FMath::Min(A.Max.Z,B.Max.Z));
+            const FVector OverlapSize=OverlapMax-OverlapMin;
+            if(OverlapSize.GetMin()>4.f)
+            {
+                ++Suspicious;
+                const FVector Mid=(OverlapMin+OverlapMax)*0.5f;
+                FCollisionQueryParams PairQuery(SCENE_QUERY_STAT(ShadowModuleOverlap),false);
+                PairQuery.AddIgnoredActor(Obstacles[I]->GetOwner());
+                PairQuery.AddIgnoredActor(Obstacles[J]->GetOwner());
+                FHitResult PlayerHit;
+                const bool bBlocksPawn=Obstacles[I]->GetCollisionResponseToChannel(ECC_Pawn)==ECR_Block || Obstacles[J]->GetCollisionResponseToChannel(ECC_Pawn)==ECR_Block;
+                const bool bAffectsPlayer=bBlocksPawn && World->OverlapAnyTestByChannel(Mid,FQuat::Identity,ECC_Pawn,FCollisionShape::MakeCapsule(Radius,HalfHeight),PairQuery);
+                UE_LOG(LogTemp,Warning,TEXT("SHADOW_MODULE_VALIDATION overlap module=%s variant=%c classification=%s actorA=%s classA=%s componentA=%s actorB=%s classB=%s componentB=%s collisionA=%d collisionB=%d blocksPawn=%d affectsPawn=%d transformA=%s transformB=%s boundsA=%s boundsB=%s penetration=%s position=%s route=%s"),
+                    *Room.ModuleId.ToString(),Room.Variant==0?TEXT('A'):TEXT('B'),bAffectsPlayer?TEXT("POTENTIALLY_PROBLEMATIC"):TEXT("INDETERMINATE"),
+                    *Obstacles[I]->GetOwner()->GetName(),*Obstacles[I]->GetOwner()->GetClass()->GetName(),*Obstacles[I]->GetName(),
+                    *Obstacles[J]->GetOwner()->GetName(),*Obstacles[J]->GetOwner()->GetClass()->GetName(),*Obstacles[J]->GetName(),
+                    int32(Obstacles[I]->GetCollisionEnabled()),int32(Obstacles[J]->GetCollisionEnabled()),bBlocksPawn,bAffectsPlayer,
+                    *Obstacles[I]->GetComponentTransform().ToHumanReadableString(),*Obstacles[J]->GetComponentTransform().ToHumanReadableString(),*A.ToString(),*B.ToString(),*OverlapSize.ToString(),*Mid.ToString(),Reachable(Mid)?TEXT("GRID_REACHABLE"):TEXT("GRID_UNREACHABLE"));
+            }
+        }
+    }
+    UE_LOG(LogTemp,Display,TEXT("SHADOW_MODULE_VALIDATION module=%s variant=%c origin=%s entry=%s exit=%s obstacles=%d overlap_suspects=%d grid_step=%.1f capsule_radius=%.1f capsule_halfheight=%.1f reachable_cells=%d/%d terminal=%s exit=%s"),
+        *Room.ModuleId.ToString(),Room.Variant==0?TEXT('A'):TEXT('B'),*Room.Origin.ToString(),*EntryPoint.ToString(),*(Room.Origin+FVector(RoomLength,Room.ExitY,0)).ToString(),Obstacles.Num(),Suspicious,Step,Radius,HalfHeight,ReachableCells,Room.CellSpawnPoints.Num(),bTerminal?TEXT("ACCESSIBLE"):TEXT("BLOCKED"),bExit?TEXT("ACCESSIBLE"):TEXT("BLOCKED"));
+    if(Room.ModuleId==TEXT("Combat.Drainage.A"))
+    {
+        const FVector Prior=FVector(3270,-300,52.5f);
+        UE_LOG(LogTemp,Display,TEXT("SHADOW_MODULE_VALIDATION prior_block_world=%s local=%s in_room=%d reachable=%d"),*Prior.ToString(),*(Prior-Room.Origin).ToString(),Room.Occupancy.ShiftBy(Room.Origin).IsInside(Prior),Reachable(Prior));
+    }
 }
 
 void AShadowPrototype::BuildRoom(FRoom& Room)
@@ -515,9 +759,15 @@ void AShadowPrototype::BuildRoom(FRoom& Room)
     else
     {
         auto* Crate = Model(TEXT("futuristic_cargo_crate_3d_model"));
-        const TArray<FVector> Cover = Room.Kind == ERoomKind::Cargo
-            ? TArray<FVector>{{430,-220,58},{710,210,58},{1000,-90,58}}
-            : TArray<FVector>{{435,0,76},{695,0,76},{940,160,58},{940,-245,58}};
+        TArray<FVector> Cover;
+        if (Room.Kind == ERoomKind::Cargo)
+            Cover = Room.Variant == 0
+                ? TArray<FVector>{{430,-220,58},{710,210,58},{1000,-90,58}}
+                : TArray<FVector>{{390,220,58},{640,-245,58},{930,120,58}};
+        else if (Room.Kind == ERoomKind::Machines)
+            Cover = Room.Variant == 0
+                ? TArray<FVector>{{435,0,76},{695,0,76},{940,160,58},{940,-245,58}}
+                : TArray<FVector>{{420,-255,58},{610,175,76},{840,-55,58},{1060,-175,58}};
         for (const FVector& At : Cover)
         {
             auto* Collider = Piece(At, FVector(142,135,At.Z*2), Trim);
@@ -527,11 +777,63 @@ void AShadowPrototype::BuildRoom(FRoom& Room)
                 Piece(At, FVector(150,143,At.Z*2+4), nullptr, Crate)->SetActorEnableCollision(false);
             }
         }
+
+        const auto Decorative = [&](const FVector& At, const FVector& Size, UStaticMesh* Mesh,
+                                     UMaterialInterface* Surface = nullptr) {
+            auto* Actor = Piece(At, Size, Surface, Mesh);
+            Actor->SetActorEnableCollision(false);
+            return Actor;
+        };
+        auto* Device = Model(TEXT("futuristic_device_3d_model"));
+        auto* WallPanel = Model(TEXT("industrial_wall_panel_3d_model"));
+        switch (Room.Kind)
+        {
+        case ERoomKind::Machines:
+            Decorative(FVector(700,0,92), FVector(210,230,184), Device);
+            Piece(FVector(700,-300,36), FVector(220,36,72), Trim);
+            Piece(FVector(700,300,36), FVector(220,36,72), Trim);
+            break;
+        case ERoomKind::Crossroads:
+            Decorative(FVector(700,0,76), FVector(150,150,152), Device);
+            Piece(FVector(500,-170,58), FVector(120,90,116), Trim);
+            Piece(FVector(500,170,58), FVector(120,90,116), Trim);
+            Piece(FVector(900,-170,58), FVector(120,90,116), Trim);
+            Piece(FVector(900,170,58), FVector(120,90,116), Trim);
+            break;
+        case ERoomKind::Substation:
+            Piece(FVector(690,-250,28), FVector(300,180,56), Trim);
+            Decorative(FVector(690,-250,112), FVector(180,105,112), Device);
+            Piece(FVector(920,230,44), FVector(250,150,88), Trim);
+            Decorative(FVector(920,230,130), FVector(140,90,120), Device);
+            break;
+        case ERoomKind::Drainage:
+            Decorative(FVector(520,-360,94), FVector(420,24,188), WallPanel);
+            Decorative(FVector(900,360,94), FVector(420,24,188), WallPanel);
+            Piece(FVector(710,-220,24), FVector(360,34,48), Trim);
+            Piece(FVector(710,220,24), FVector(360,34,48), Trim);
+            break;
+        case ERoomKind::DoubleGallery:
+            Piece(FVector(700,0,82), FVector(130,470,164), Trim);
+            Decorative(FVector(700,0,170), FVector(100,360,86), Device);
+            Piece(FVector(430,-300,58), FVector(140,92,116), Trim);
+            Piece(FVector(430,300,58), FVector(140,92,116), Trim);
+            Piece(FVector(980,-300,58), FVector(140,92,116), Trim);
+            Piece(FVector(980,300,58), FVector(140,92,116), Trim);
+            break;
+        default:
+            break;
+        }
     }
 
-    const TCHAR* Label = Room.Kind == ERoomKind::Reception ? TEXT("RECEPÇÃO")
-        : Room.Kind == ERoomKind::Cargo ? TEXT("DEPÓSITO")
-        : Room.Kind == ERoomKind::Machines ? TEXT("ANEL DE MÁQUINAS") : TEXT("OFICINA DE TRANSIÇÃO");
+    const TCHAR* Label = TEXT("SALA DE COMBATE");
+    if (Room.Kind == ERoomKind::Reception) Label = TEXT("RECEPÇÃO");
+    else if (Room.Kind == ERoomKind::Cargo) Label = TEXT("DEPÓSITO");
+    else if (Room.Kind == ERoomKind::Machines) Label = TEXT("ANEL DE MÁQUINAS");
+    else if (Room.Kind == ERoomKind::Crossroads) Label = TEXT("CRUZAMENTO");
+    else if (Room.Kind == ERoomKind::Substation) Label = TEXT("SUBESTAÇÃO");
+    else if (Room.Kind == ERoomKind::Drainage) Label = TEXT("DRENAGEM");
+    else if (Room.Kind == ERoomKind::DoubleGallery) Label = TEXT("GALERIA DUPLA");
+    else if (Room.Kind == ERoomKind::Workshop) Label = TEXT("OFICINA DE TRANSIÇÃO");
     auto* Sign = World->SpawnActor<AActor>();
     Room.Geometry.Add(Sign);
     auto* Text = NewObject<UTextRenderComponent>(Sign);
@@ -545,7 +847,11 @@ void AShadowPrototype::BuildRoom(FRoom& Room)
     Sign->SetActorLocationAndRotation(Room.Origin + FVector(RoomLength-42,Exit,bWorkshop ? 355 : 270),
                                      FRotator(0,180,0));
     const FLinearColor Tint = bSafe ? FLinearColor(.55f,.85f,1.f)
-        : Room.Kind == ERoomKind::Cargo ? FLinearColor(1.f,.66f,.32f) : FLinearColor(.62f,.77f,1.f);
+        : Room.Kind == ERoomKind::Cargo ? FLinearColor(1.f,.66f,.32f)
+        : Room.Kind == ERoomKind::Substation ? FLinearColor(1.f,.38f,.20f)
+        : Room.Kind == ERoomKind::Drainage ? FLinearColor(.30f,.72f,.85f)
+        : Room.Kind == ERoomKind::DoubleGallery ? FLinearColor(.75f,.55f,1.f)
+        : FLinearColor(.62f,.77f,1.f);
     for (float X : {260.f, 705.f, 1110.f})
         Room.Geometry.Add(Lamp(World,Room.Origin+FVector(X,0,311),Tint,2650,640));
 
@@ -584,26 +890,62 @@ void AShadowPrototype::PrepareNextRoom()
 {
     bNextStaged = false;
     Next = FRoom{};
-    const bool bCombat = Current.Kind == ERoomKind::Cargo || Current.Kind == ERoomKind::Machines;
-    if (bCombat && RoomsThisFloor + 1 >= CombatRoomsPerFloor)
+    const bool bCombat = IsCombatRoom(Current.Kind);
+    const bool bFirstCombatSelection = !bDebugModuleConsumed && bDebugModuleRequested;
+    if (bDebugModuleRequested && !bDebugModuleValid && bFirstCombatSelection)
+    {
+        bNextReady = false;
+        UE_LOG(LogTemp, Error, TEXT("SHADOW_DEBUG_SELECTION_FAILED reason=invalid_request module=%s"), *DebugModuleName);
+        return;
+    }
+    if (bCombat && RoomsThisFloor + 1 >= CombatRoomsPerFloorSetting)
         Next.Kind = ERoomKind::Workshop;
     else if (bCombat)
-        Next.Kind = Current.Kind == ERoomKind::Cargo ? ERoomKind::Machines : ERoomKind::Cargo;
+        Next.Kind = SelectCombatRoomKind();
     else
-        Next.Kind = RoomRandom.RandRange(0,1) == 0 ? ERoomKind::Cargo : ERoomKind::Machines;
+        Next.Kind = SelectCombatRoomKind();
 
-    const float ExitCandidates[] = {-220.f, 220.f};
-    Next.ExitY = Next.Kind == ERoomKind::Workshop ? 0.f : ExitCandidates[RoomRandom.RandRange(0,1)];
+    Next.CellsNeeded = CellsForRoom(Next.Kind, FloorNumber);
+    const bool bApplyDirected = bFirstCombatSelection && bDebugModuleValid && IsCombatRoom(Next.Kind);
+    if (bApplyDirected)
+    {
+        Next.Kind = DebugRoomKind;
+        Next.Variant = DebugVariant;
+    }
+    else
+    {
+        Next.Variant = RoomRandom.RandRange(0,1);
+        if (Next.Variant == Current.Variant && Next.Kind == Current.Kind)
+            Next.Variant = 1 - Current.Variant;
+    }
+
+    ConfigureRoom(Next);
+    if (bApplyDirected)
+        bDebugModuleConsumed = true;
+    const int32 ExitIndex = RoomRandom.RandRange(0, Next.ExitTransforms.Num()-1);
+    Next.ExitY = Next.ExitTransforms.IsValidIndex(ExitIndex)
+        ? Next.ExitTransforms[ExitIndex].GetLocation().Y : 0.f;
+    if (Next.Kind == ERoomKind::Workshop)
+        Next.ExitY = 0.f;
     Next.Origin = Current.Origin + FVector(RoomLength,Current.ExitY,IsWorkshop() ? WorkshopRise : 0);
-    const FBox CurrentBounds(Current.Origin+FVector(0,-520,0),Current.Origin+FVector(RoomLength,520,378));
-    const FBox NextBounds(Next.Origin+FVector(1,-520,0),Next.Origin+FVector(RoomLength,520,378));
-    bNextReady = !CurrentBounds.Intersect(NextBounds);
+    bNextReady = ValidateRoomPlacement(Next);
     if (bNextReady)
     {
         BuildRoom(Next);
         bNextReady = IsValid(Next.Door);
     }
-    UE_LOG(LogTemp,Display,TEXT("SHADOW_ROOM_PREPARED kind=%d origin=%s ready=%d"),int32(Next.Kind),*Next.Origin.ToString(),bNextReady);
+    UE_LOG(LogTemp,Display,TEXT("SHADOW_ROOM_PREPARED kind=%d module=%s variant=%d origin=%s ready=%d"),
+        int32(Next.Kind), *Next.ModuleId.ToString(), Next.Variant, *Next.Origin.ToString(), bNextReady);
+    if (bApplyDirected && !bNextReady)
+    {
+        UE_LOG(LogTemp, Error, TEXT("SHADOW_DEBUG_SELECTION_FAILED requested=%s.%s actual=%s ready=0 reason=placement_or_build_validation"),
+            *DebugModuleName, DebugVariant == 0 ? TEXT("A") : TEXT("B"), *Next.ModuleId.ToString());
+    }
+    else if (bApplyDirected)
+    {
+        UE_LOG(LogTemp, Display, TEXT("SHADOW_DEBUG_SELECTION_OK requested=%s.%s actual=%s ready=1"),
+            *DebugModuleName, DebugVariant == 0 ? TEXT("A") : TEXT("B"), *Next.ModuleId.ToString());
+    }
 }
 
 void AShadowPrototype::StageNextRoom()
@@ -611,12 +953,10 @@ void AShadowPrototype::StageNextRoom()
     if (!bNextReady || bNextStaged)
         return;
     bNextStaged = true;
-    if (Next.Kind != ERoomKind::Cargo && Next.Kind != ERoomKind::Machines)
+    if (!IsCombatRoom(Next.Kind))
         return;
 
-    const FVector Candidates[] = {{560,-285,220},{790,325,220},{1130,-320,220},
-                                  {1150,95,220},{465,320,220},{325,-335,220}};
-    for (const FVector& Local : Candidates)
+    for (const FVector& Local : Next.DroneSpawnPoints)
     {
         const FVector Point = Next.Origin + Local;
         if (DronePathClear(Point, Point + FVector(0,0,1)))
@@ -742,12 +1082,26 @@ void AShadowPrototype::BuildPickups()
     if (IsWorkshop())
         return;
     const bool bReception = Current.Kind == ERoomKind::Reception;
-    const FVector Positions[] = {{565,-300,49},{850,275,49},{1160,-225,49}};
-    const FVector CellAt = bReception ? FVector(640,0,49) : Positions[RoomRandom.RandRange(0,2)];
-    auto* Cell = Block(GetWorld(),Current.Origin+CellAt,FVector(45,45,87),Model(TEXT("futuristic_energy_capsule_3d_model")));
-    Cell->SetActorEnableCollision(false);
-    Current.Geometry.Add(Lamp(GetWorld(),Current.Origin+CellAt+FVector(0,0,20),Cyan,1150,180));
-    Pickups.Add({Cell,true});
+    const int32 CellCount = bReception ? 1 : FMath::Clamp(GetCellsNeeded(), 1, 3);
+    if (Current.CellSpawnPoints.Num() < CellCount)
+        ConfigureRoom(Current);
+    TArray<int32> Available;
+    for (int32 Index = 0; Index < Current.CellSpawnPoints.Num(); ++Index)
+        Available.Add(Index);
+    for (int32 Index = 0; Index < CellCount; ++Index)
+    {
+        const int32 Choice = RoomRandom.RandRange(0, Available.Num()-1);
+        const FVector CellAt = Current.CellSpawnPoints.IsValidIndex(Available[Choice])
+            ? Current.CellSpawnPoints[Available[Choice]] : FVector(640,0,49);
+        Available.RemoveAtSwap(Choice);
+        auto* Cell = Block(GetWorld(),Current.Origin+CellAt,FVector(45,45,87),Model(TEXT("futuristic_energy_capsule_3d_model")));
+        Cell->SetActorEnableCollision(true);
+        Cell->GetStaticMeshComponent()->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+        Cell->GetStaticMeshComponent()->SetCollisionResponseToAllChannels(ECR_Ignore);
+        Cell->GetStaticMeshComponent()->SetCollisionResponseToChannel(ECC_Visibility,ECR_Block);
+        Current.Geometry.Add(Lamp(GetWorld(),Current.Origin+CellAt+FVector(0,0,20),Cyan,1150,180));
+        Pickups.Add({Cell,true});
+    }
     if (!bReception)
     {
         auto* Ammo = Block(GetWorld(),Current.Origin+FVector(340,260,34),FVector(55,53,48),
@@ -962,21 +1316,14 @@ void AShadowPrototype::Tick(float DeltaSeconds)
     {
         if (!Pickup.Actor || FVector::DistSquared(Player->GetActorLocation(),Pickup.Actor->GetActorLocation()) > FMath::Square(106.f))
             continue;
-        const int32 AmmoLimit = Player->HasPistolEquipped() ? PistolReserveLimit : ReserveLimit;
-        if (!Pickup.bCell && Player->Reserve >= AmmoLimit)
-            continue;
         if (Pickup.bCell)
-        {
-            ++Carried;
-            Sound(TEXT("SFX_SR_Celula_Coletada"));
-            Notice(TEXT("Célula coletada"));
-        }
-        else
-        {
-            Player->Reserve = FMath::Min(AmmoLimit, Player->Reserve + (Player->HasPistolEquipped() ? 12 : 24));
-            Sound(TEXT("SFX_SR_Municao_Coletada"));
-            Notice(TEXT("Munição coletada"));
-        }
+            continue;
+        const int32 AmmoLimit = Player->HasPistolEquipped() ? PistolReserveLimit : ReserveLimit;
+        if (Player->Reserve >= AmmoLimit)
+            continue;
+        Player->Reserve = FMath::Min(AmmoLimit, Player->Reserve + (Player->HasPistolEquipped() ? 12 : 24));
+        Sound(TEXT("SFX_SR_Municao_Coletada"));
+        Notice(TEXT("Munição coletada"));
         Pickup.Actor->Destroy();
         Pickup.Actor = nullptr;
     }
@@ -1006,6 +1353,21 @@ void AShadowPrototype::Interact(AShadowRunner& Player)
     {
         CloseShop();
         return;
+    }
+    if (AActor* Cell = GetNearbyCell(Player))
+    {
+        for (auto& Pickup : Pickups)
+        {
+            if (Pickup.bCell && Pickup.Actor == Cell)
+            {
+                ++Carried;
+                Sound(TEXT("SFX_SR_Celula_Coletada"));
+                Notice(TEXT("Célula coletada"));
+                Pickup.Actor->Destroy();
+                Pickup.Actor = nullptr;
+                return;
+            }
+        }
     }
     if (IsWorkbenchRoom() && FVector::DistSquared(Player.GetActorLocation(), GetWorkbenchPosition()) <= FMath::Square(210.f))
     {
@@ -1040,6 +1402,71 @@ void AShadowPrototype::Interact(AShadowRunner& Player)
         Sound(TEXT("SFX_SR_Porta_Abrindo"));
         Notice(TEXT("Comporta aberta"));
     }
+}
+
+int32 AShadowPrototype::CellsForRoom(ERoomKind Kind, int32 Floor) const
+{
+    if (Kind == ERoomKind::Workshop)
+        return 0;
+    if (Kind == ERoomKind::Reception)
+        return 1;
+    int32 Value = 1;
+    const TCHAR* Key = TEXT("CargoCellsFloor1");
+    if (Kind == ERoomKind::Machines) Key = TEXT("MachinesCellsFloor1");
+    else if (Kind == ERoomKind::Crossroads) Key = TEXT("CrossroadsCellsFloor1");
+    else if (Kind == ERoomKind::Substation) Key = TEXT("SubstationCellsFloor1");
+    else if (Kind == ERoomKind::Drainage) Key = TEXT("DrainageCellsFloor1");
+    else if (Kind == ERoomKind::DoubleGallery) Key = TEXT("DoubleGalleryCellsFloor1");
+    if (Floor == 2)
+    {
+        if (Kind == ERoomKind::Cargo) Key = TEXT("CargoCellsFloor2");
+        else if (Kind == ERoomKind::Machines) Key = TEXT("MachinesCellsFloor2");
+        else if (Kind == ERoomKind::Crossroads) Key = TEXT("CrossroadsCellsFloor2");
+        else if (Kind == ERoomKind::Substation) Key = TEXT("SubstationCellsFloor2");
+        else if (Kind == ERoomKind::Drainage) Key = TEXT("DrainageCellsFloor2");
+        else if (Kind == ERoomKind::DoubleGallery) Key = TEXT("DoubleGalleryCellsFloor2");
+    }
+    else if (Floor >= 3)
+    {
+        if (Kind == ERoomKind::Cargo) Key = TEXT("CargoCellsAdvanced");
+        else if (Kind == ERoomKind::Machines) Key = TEXT("MachinesCellsAdvanced");
+        else if (Kind == ERoomKind::Crossroads) Key = TEXT("CrossroadsCellsAdvanced");
+        else if (Kind == ERoomKind::Substation) Key = TEXT("SubstationCellsAdvanced");
+        else if (Kind == ERoomKind::Drainage) Key = TEXT("DrainageCellsAdvanced");
+        else if (Kind == ERoomKind::DoubleGallery) Key = TEXT("DoubleGalleryCellsAdvanced");
+    }
+    if (GConfig)
+        GConfig->GetInt(TEXT("ShadowRun.Rooms"), Key, Value, GGameIni);
+    return FMath::Clamp(Value, 1, 3);
+}
+
+AActor* AShadowPrototype::GetNearbyCell(const AShadowRunner& Player) const
+{
+    const FVector Eye = Player.GetActorLocation() + FVector(0,0,58);
+    const FVector Forward = Player.GetControlRotation().Vector();
+    AActor* Best = nullptr;
+    double BestDistance = TNumericLimits<double>::Max();
+    for (const auto& Pickup : Pickups)
+    {
+        if (!Pickup.bCell || !IsValid(Pickup.Actor))
+            continue;
+        const FVector Target = Pickup.Actor->GetActorLocation() + FVector(0,0,35);
+        const FVector ToTarget = Target - Eye;
+        const double Distance = ToTarget.Size();
+        if (Distance > 190 || (Distance > 100 && FVector::DotProduct(Forward, ToTarget.GetSafeNormal()) < .15f))
+            continue;
+        FHitResult Hit;
+        FCollisionQueryParams Query(SCENE_QUERY_STAT(ShadowCellInteract), true);
+        Query.AddIgnoredActor(&Player);
+        if (GetWorld()->LineTraceSingleByChannel(Hit, Eye, Target, ECC_Visibility, Query) && Hit.GetActor() != Pickup.Actor)
+            continue;
+        if (Distance < BestDistance)
+        {
+            BestDistance = Distance;
+            Best = Pickup.Actor;
+        }
+    }
+    return Best;
 }
 
 FVector AShadowPrototype::GetObjectivePosition(const FVector& PlayerLocation) const
@@ -1232,11 +1659,33 @@ void AShadowPrototypeHUD::DrawHUD()
         DrawMenu(*Mode, *Player);
         return;
     }
-    auto* Font = GEngine->GetMediumFont();
+    const auto EnsureFont = [this](TObjectPtr<UFont>& Typeface, const TCHAR* File) -> UFont* {
+        if (!Typeface)
+        {
+            Typeface = NewObject<UFont>(this);
+            Typeface->FontCacheType = EFontCacheType::Runtime;
+            Typeface->GetMutableInternalCompositeFont().DefaultTypeface.AppendFont(NAME_None,
+                FPaths::ProjectContentDir() / TEXT("ShadowRun/UI/Fonts") / File,
+                EFontHinting::Default, EFontLoadingPolicy::LazyLoad);
+        }
+        return Typeface.Get();
+    };
+    auto* Font = EnsureFont(MenuBodyFont, TEXT("ChakraPetch-SemiBold.ttf"));
+    auto* TitleFont = EnsureFont(MenuTitleFont, TEXT("BarlowCondensed-ExtraBold.ttf"));
+    if (!Font)
+        Font = GEngine->GetMediumFont();
+    if (!TitleFont)
+        TitleFont = Font;
     const FLinearColor White(.91f,.95f,.97f);
     const FLinearColor Plate(.019f,.034f,.043f,.89f);
+    const FLinearColor Muted(.63f,.72f,.77f);
+    const float S = FMath::Clamp(FMath::Min(W/1920.f,H/1080.f),.86f,1.25f);
+    const float Margin = 28.f*S;
     const auto Text = [this,Font](const FString& Label, FLinearColor Color, float X, float Y, float Scale=1.f) {
         DrawText(Label,Color,X,Y,Font,Scale);
+    };
+    const auto TitleText = [this,TitleFont](const FString& Label, FLinearColor Color, float X, float Y, float Scale=1.f) {
+        DrawText(Label,Color,X,Y,TitleFont,Scale);
     };
     const auto Center = [this,Font,W](const FString& Label, FLinearColor Color, float Y, float Scale) {
         float Width, Height;
@@ -1246,34 +1695,58 @@ void AShadowPrototypeHUD::DrawHUD()
 
     if (!Mode->IsShopOpen())
     {
-    DrawRect(Plate,24,25,315,69);
-    DrawRect(Cyan,24,25,3,69);
-    Text(FString::Printf(TEXT("SHADOW RUN  /  ANDAR %02d"),Mode->FloorNumber),Cyan,37,34,.88f);
+    const float Top = 24.f*S;
+    const float HeaderW = 430.f*S;
+    DrawRect(Plate,Margin,Top,HeaderW,92.f*S);
+    DrawRect(Cyan,Margin,Top,4.f*S,92.f*S);
+    TitleText(FString::Printf(TEXT("SHADOW RUN  /  ANDAR %02d"),Mode->FloorNumber),Cyan,Margin+18.f*S,Top+14.f*S,1.02f*S);
     const FString Goal = !Player->HasCarbine() ? TEXT("Pegue a carabina")
         : Mode->IsWorkshop() ? TEXT("Suba a escada")
         : Mode->Deposited == Mode->GetCellsNeeded() ? TEXT("Atravesse a comporta")
-        : Mode->Carried + Mode->Deposited == Mode->GetCellsNeeded() ? TEXT("Leve a célula ao terminal")
-        : TEXT("Encontre a célula de energia");
-    Text(Goal,White,37,58,1.15f);
-    DrawRect(Plate,W-279,25,255,92);
-    Text(FString::Printf(TEXT("CÉLULAS   %d / %d"),Mode->Carried+Mode->Deposited,Mode->GetCellsNeeded()),Cyan,W-264,35,1.07f);
-    Text(FString::Printf(TEXT("NO TERMINAL  %d     ABATES  %d"),Mode->Deposited,Mode->Kills),White,W-264,63,.85f);
-    Text(FString::Printf(TEXT("%d CR   /   %d PTS"),Mode->GetCredits(),Mode->Score),Amber,W-264,86,.9f);
+        : Mode->Deposited == Mode->GetCellsNeeded() ? TEXT("Passagem liberada")
+        : Mode->Carried > 0 ? TEXT("Leve as células até o terminal")
+        : TEXT("Aproxime-se e pressione E para coletar");
+    Text(Goal,White,Margin+18.f*S,Top+52.f*S,1.16f*S);
+    const float ObjectiveY = Top+74.f*S;
+    Text(FString::Printf(TEXT("ENERGIA DA SALA   NECESSÁRIAS %d   |   CARREGADAS %d   |   DEPOSITADAS %d / %d"),
+        Mode->GetCellsNeeded(),Mode->Carried,Mode->Deposited,Mode->GetCellsNeeded()),Cyan,Margin+18.f*S,ObjectiveY,.72f*S);
 
-    DrawRect(Plate,24,H-108,228,83);
-    Text(FString::Printf(TEXT("VIDA  %d / %d"),Player->Health,Player->MaxHealth),White,37,H-103,1.05f);
-    DrawRect(FLinearColor(.12f,.19f,.22f),37,H-79,202,4);
-    DrawRect(Player->Health>30 ? Cyan : FLinearColor::Red,37,H-79,202.f*Player->Health/Player->MaxHealth,4);
-    Text(FString::Printf(TEXT("ESCUDO  %d / %d"),Player->Shield,Player->MaxShield),Cyan,37,H-72,.9f);
+    const float ObjectiveW = 520.f*S;
+    const float ObjectiveX = W-Margin-ObjectiveW;
+    DrawRect(Plate,ObjectiveX,Top,ObjectiveW,112.f*S);
+    DrawRect(Cyan,ObjectiveX,Top,4.f*S,112.f*S);
+    TitleText(TEXT("OBJETIVO PRINCIPAL"),Cyan,ObjectiveX+18.f*S,Top+14.f*S,.92f*S);
+    Text(Goal,White,ObjectiveX+18.f*S,Top+40.f*S,1.10f*S);
+    Text(FString::Printf(TEXT("CÉLULAS  %d / %d      TERMINAL  %d      ABATES  %d"),
+        Mode->Carried,Mode->GetCellsNeeded(),Mode->Deposited,Mode->Kills),White,ObjectiveX+18.f*S,Top+72.f*S,.86f*S);
+    Text(FString::Printf(TEXT("%d CR   /   %d PTS"),Mode->GetCredits(),Mode->Score),Amber,ObjectiveX+18.f*S,Top+94.f*S,.82f*S);
+
+    const float HealthX = Margin;
+    const float HealthY = H-Margin-150.f*S;
+    const float HealthW = 390.f*S;
+    DrawRect(Plate,HealthX,HealthY,HealthW,132.f*S);
+    DrawRect(Player->Health > Player->MaxHealth*.30f ? Cyan : FLinearColor::Red,HealthX,HealthY,5.f*S,132.f*S);
+    TitleText(TEXT("INTEGRIDADE"),White,HealthX+20.f*S,HealthY+14.f*S,.92f*S);
+    Text(FString::Printf(TEXT("VIDA   %d / %d"),Player->Health,Player->MaxHealth),White,HealthX+20.f*S,HealthY+39.f*S,1.08f*S);
+    DrawRect(FLinearColor(.09f,.15f,.18f),HealthX+20.f*S,HealthY+58.f*S,HealthW-40.f*S,11.f*S);
+    DrawRect(Player->Health>30 ? Cyan : FLinearColor::Red,HealthX+20.f*S,HealthY+58.f*S,(HealthW-40.f*S)*FMath::Clamp((float)Player->Health/FMath::Max(1,Player->MaxHealth),0.f,1.f),11.f*S);
+    Text(FString::Printf(TEXT("ESCUDO   %d / %d"),Player->Shield,Player->MaxShield),Cyan,HealthX+20.f*S,HealthY+84.f*S,.92f*S);
+    DrawRect(FLinearColor(.09f,.15f,.18f),HealthX+20.f*S,HealthY+101.f*S,HealthW-40.f*S,8.f*S);
     if (Player->MaxShield > 0)
-        DrawRect(Cyan,37,H-47,202.f*Player->Shield/Player->MaxShield,4);
-    DrawRect(Plate,W-247,H-82,223,57);
+        DrawRect(Cyan,HealthX+20.f*S,HealthY+101.f*S,(HealthW-40.f*S)*FMath::Clamp((float)Player->Shield/FMath::Max(1,Player->MaxShield),0.f,1.f),8.f*S);
+
+    const float AmmoW = 360.f*S;
+    const float AmmoX = W-Margin-AmmoW;
+    const float AmmoY = H-Margin-106.f*S;
+    DrawRect(Plate,AmmoX,AmmoY,AmmoW,88.f*S);
     const TCHAR* WeaponLabel = Player->HasPistolEquipped() ? TEXT("PISTOLA  /  2") : TEXT("CARABINA  /  1");
+    const FLinearColor AmmoColor = Player->Magazine <= 3 ? FLinearColor(1.f,.35f,.18f) : Amber;
     Text(Player->IsReloading() ? TEXT("RECARREGANDO") : Player->Magazine == 0 ? TEXT("R  RECARREGAR") : WeaponLabel,
-        Amber,W-234,H-78,.90f);
-    Text(FString::Printf(TEXT("%02d  /  %02d"),Player->Magazine,Player->Reserve),White,W-234,H-56,1.3f);
+        AmmoColor,AmmoX+20.f*S,AmmoY+14.f*S,.94f*S);
+    Text(FString::Printf(TEXT("%02d  /  %02d"),Player->Magazine,Player->Reserve),White,AmmoX+20.f*S,AmmoY+42.f*S,1.55f*S);
+    Text(TEXT("CARREGADOR  /  RESERVA"),Muted,AmmoX+148.f*S,AmmoY+45.f*S,.67f*S);
     if (Player->IsReloading())
-        DrawRect(Amber, W-247, H-28, 223 * Player->GetReloadProgress(), 3);
+        DrawRect(Amber,AmmoX,AmmoY+82.f*S,AmmoW*Player->GetReloadProgress(),4.f*S);
 
     const bool bConfirmedHit = GetWorld()->GetTimeSeconds() < Mode->HitMarkerUntil;
     UTexture2D* Reticle = bConfirmedHit && HitMarker ? HitMarker.Get() : Crosshair.Get();
@@ -1285,13 +1758,16 @@ void AShadowPrototypeHUD::DrawHUD()
         DrawRect(White,W/2-8,H/2-1,16,2);
         DrawRect(White,W/2-1,H/2-8,2,16);
     }
+    const bool bNearCell = Mode->HasNearbyCell(*Player);
     const bool bNearTerminal = FVector::Dist(Player->GetActorLocation(),Mode->TerminalPosition)<210 && Mode->Deposited<Mode->GetCellsNeeded();
     const bool bNearBench = Mode->HasWorkbench() &&
         FVector::DistSquared(Player->GetActorLocation(),Mode->GetWorkbenchPosition()) <= FMath::Square(210.f);
-    if (bNearBench && !Mode->IsShopOpen() && !Mode->bFinished)
-        Center(TEXT("[E]  BANCADA"),Cyan,H*.61f,1.05f);
+    if (bNearCell && !Mode->IsShopOpen() && !Mode->bFinished)
+        Center(TEXT("[E]  COLETAR CÉLULA DE ENERGIA"),Cyan,H*.61f,1.16f*S);
+    else if (bNearBench && !Mode->IsShopOpen() && !Mode->bFinished)
+        Center(TEXT("[E]  BANCADA"),Cyan,H*.61f,1.10f*S);
     else if (bNearTerminal)
-        Center(TEXT("[E]  TERMINAL DE ENERGIA"),Cyan,H*.61f,1.05f);
+        Center(TEXT("[E]  DEPOSITAR CÉLULAS NO TERMINAL"),Cyan,H*.61f,1.10f*S);
     else if (!Mode->bFinished && !UGameplayStatics::IsGamePaused(this))
     {
         const FVector Target = Mode->GetObjectivePosition(Player->GetActorLocation());
@@ -1301,28 +1777,27 @@ void AShadowPrototypeHUD::DrawHUD()
             Screen.X > 58 && Screen.X < W-58 && Screen.Y > 106 && Screen.Y < H-103)
         {
             const int32 Meters = FMath::RoundToInt(FVector::Dist(Target,Player->GetActorLocation()) / 100);
-            DrawRect(Plate,Screen.X-24,Screen.Y-10,48,22);
-            DrawRect(Cyan,Screen.X-3,Screen.Y+12,6,3);
-            Text(FString::Printf(TEXT("%d m"),Meters),Cyan,Screen.X-16,Screen.Y-8,.92f);
+            DrawRect(Plate,Screen.X-28*S,Screen.Y-12*S,56*S,25*S);
+            DrawRect(Cyan,Screen.X-3*S,Screen.Y+14*S,6*S,3*S);
+            Text(FString::Printf(TEXT("%d m"),Meters),Cyan,Screen.X-19*S,Screen.Y-9*S,.92f*S);
         }
     }
     if (GetWorld()->GetTimeSeconds()<Mode->FeedbackUntil)
-        Center(Mode->Feedback,Cyan,H*.70f,1.1f);
+        Center(Mode->Feedback,Cyan,H*.70f,1.18f*S);
     if (GetWorld()->GetTimeSeconds()<9)
-        Center(TEXT("WASD mover  |  Esq. disparar  |  Dir. mirar  |  R recarregar  |  E interagir  |  1/2 armas  |  P pausa"),White,H-31,.85f);
+        Center(TEXT("WASD mover  |  Esq. disparar  |  Dir. mirar  |  R recarregar  |  E interagir  |  1/2 armas  |  P pausa"),White,H-34.f*S,.86f*S);
 
     }
     if (Mode->IsShopOpen())
     {
         const bool bWorkshop = Mode->IsWorkshop();
-        const float S = FMath::Min(W/960.f, H/540.f);
-        const float X = (W-872*S)/2, Y = (H-410*S)/2;
-        const FLinearColor Muted(.63f,.72f,.77f);
-        const auto Box = [this,X,Y,S](FLinearColor Color,float Left,float Top,float Width,float Height) {
-            DrawRect(Color,X+Left*S,Y+Top*S,Width*S,Height*S);
+        const float MenuS = FMath::Min(W/960.f, H/540.f);
+        const float X = (W-872*MenuS)/2, Y = (H-410*MenuS)/2;
+        const auto Box = [this,X,Y,MenuS](FLinearColor Color,float Left,float Top,float Width,float Height) {
+            DrawRect(Color,X+Left*MenuS,Y+Top*MenuS,Width*MenuS,Height*MenuS);
         };
-        const auto Label = [this,X,Y,S](const FString& Value,FLinearColor Color,float Left,float Top,float Size,bool bTitle = false) {
-            DrawMenuLabel(Value,Color,{X+Left*S,Y+Top*S},Size*S,bTitle);
+        const auto Label = [this,X,Y,MenuS](const FString& Value,FLinearColor Color,float Left,float Top,float Size,bool bTitle = false) {
+            DrawMenuLabel(Value,Color,{X+Left*MenuS,Y+Top*MenuS},Size*MenuS,bTitle);
         };
         DrawRect(FLinearColor(.005f,.012f,.018f,.46f),0,0,W,H);
         Box(Cyan,26,25,4,44);
@@ -1344,7 +1819,7 @@ void AShadowPrototypeHUD::DrawHUD()
             const float Width = bWorkshop ? 198 : 402;
             const float Height = bWorkshop ? 201 : 93;
             const FName CardName(TEXT("ShopCard"), Index + 1);
-            const FVector2D At(X+Left*S,Y+Top*S), Size(Width*S,Height*S);
+            const FVector2D At(X+Left*MenuS,Y+Top*MenuS), Size(Width*MenuS,Height*MenuS);
             const bool bHover = RegisterButton(CardName, At, Size);
             DrawButtonSurface(CardName,At,Size,Index == Mode->GetShopSelection() || bHover);
             Label(FString::FromInt(Index+1),Muted,Left+Width-29,Top+10,14);
@@ -1353,7 +1828,7 @@ void AShadowPrototypeHUD::DrawHUD()
             const float IconX = Left+(bWorkshop ? (Width-52)/2 : 18);
             const float IconY = Top+(bWorkshop ? 43 : 19);
             if (auto* Icon = bWorkshop ? PerkIcons[Index] : Icons[Index])
-                DrawTextureSimple(Icon,X+IconX*S,Y+IconY*S,52*S/FMath::Max(1,Icon->GetSizeX()));
+                DrawTextureSimple(Icon,X+IconX*MenuS,Y+IconY*MenuS,52*MenuS/FMath::Max(1,Icon->GetSizeX()));
             const float TextX = Left+(bWorkshop ? 20 : 87);
             const float TextY = Top+(bWorkshop ? 107 : 12);
             Label(Card.Title,White,TextX,TextY,bWorkshop ? 21 : 23,true);
@@ -1362,11 +1837,11 @@ void AShadowPrototypeHUD::DrawHUD()
                 Label(FString::Printf(TEXT("%d CR"),Card.Price),Card.bAvailable ? Amber : Muted,TextX,TextY+50,15);
         }
         const auto& Selected = Cards[Mode->GetShopSelection()];
-        const bool bBackHover = RegisterButton(TEXT("ShopBack"), {X+26*S,Y+350*S}, {290*S,36*S});
-        const bool bBuyHover = RegisterButton(TEXT("ShopBuy"), {X+578*S,Y+350*S}, {267*S,36*S});
-        DrawButtonSurface(TEXT("ShopBack"),{X+26*S,Y+350*S},{290*S,36*S},bBackHover);
+        const bool bBackHover = RegisterButton(TEXT("ShopBack"), {X+26*MenuS,Y+350*MenuS}, {290*MenuS,36*MenuS});
+        const bool bBuyHover = RegisterButton(TEXT("ShopBuy"), {X+578*MenuS,Y+350*MenuS}, {267*MenuS,36*MenuS});
+        DrawButtonSurface(TEXT("ShopBack"),{X+26*MenuS,Y+350*MenuS},{290*MenuS,36*MenuS},bBackHover);
         Label(bWorkshop ? TEXT("VOLTAR À PARTIDA  [E]") : TEXT("VOLTAR  [E]"),White,40,357,16);
-        DrawButtonSurface(TEXT("ShopBuy"),{X+578*S,Y+350*S},{267*S,36*S},true,Selected.bAvailable);
+        DrawButtonSurface(TEXT("ShopBuy"),{X+578*MenuS,Y+350*MenuS},{267*MenuS,36*MenuS},true,Selected.bAvailable);
         const bool bSelectedHeal = bWorkshop && Mode->GetShopSelection() == Cards.Num()-1;
         const FString BuyLabel = Selected.bAvailable ? FString::Printf(TEXT("COMPRAR   %d CR"),Selected.Price)
             : !Selected.Price ? TEXT("NÍVEL MÁXIMO")

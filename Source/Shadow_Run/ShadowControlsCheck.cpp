@@ -358,7 +358,9 @@ namespace
                 }
                 Verify(!Mode->IsPassageOpen(), TEXT("Door remains locked before deposit"));
                 PreviousCell = Cell;
+                PC->SetControlRotation(FRotator(-45.f,0.f,0.f));
                 Runner->SetActorLocation(Cell->GetActorLocation()+FVector(0,0,47));
+                Tap(EKeys::E);
                 Step = 111;
                 Wait(.15);
                 break;

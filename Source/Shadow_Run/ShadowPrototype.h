@@ -165,9 +165,10 @@ public:
     double FeedbackUntil = 0;
     double HitMarkerUntil = 0;
     FVector GetObjectivePosition(const FVector& PlayerLocation) const;
-    int32 GetCellsNeeded() const { return Current.Kind == ERoomKind::Workshop ? 0 : 1; }
+    int32 GetCellsNeeded() const { return Current.Kind == ERoomKind::Workshop ? 0 : Current.CellsNeeded; }
     bool IsWorkshop() const { return Current.Kind == ERoomKind::Workshop; }
     bool IsPassageOpen() const { return bNextReady && GateHeight >= 220.f; }
+    bool HasNearbyCell(const AShadowRunner& Player) const { return GetNearbyCell(Player) != nullptr; }
     int32 GetPerks(int32 Track) const;
     int32 FloorNumber = 1;
     int32 RoomsCleared = 0;
@@ -195,16 +196,29 @@ private:
         double RespawnAt = 0;
     };
 
-    enum class ERoomKind : uint8 { Reception, Cargo, Machines, Workshop };
+    enum class ERoomKind : uint8 { Reception, Cargo, Machines, Crossroads, Substation, Drainage, DoubleGallery, Workshop };
     struct FRoom
     {
         ERoomKind Kind = ERoomKind::Reception;
+        FName ModuleId = NAME_None;
         FVector Origin = FVector::ZeroVector;
+        FTransform EntryTransform;
+        TArray<FTransform> ExitTransforms;
+        FBox Occupancy;
         float ExitY = 0;
+        int32 Variant = 0;
+        int32 CellsNeeded = 1;
+        TArray<FVector> CellSpawnPoints;
+        TArray<FVector> DroneSpawnPoints;
         TArray<AActor*> Geometry;
         AActor* Door = nullptr;
         TArray<UStaticMeshComponent*> DoorIndicators;
     };
+    void ConfigureRoom(FRoom& Room) const;
+    bool IsCombatRoom(ERoomKind Kind) const;
+    ERoomKind SelectCombatRoomKind();
+    bool ValidateRoomPlacement(const FRoom& Candidate) const;
+    void ValidateDebugModule(const FRoom& Room) const;
     void BuildRoom(FRoom& Room);
     void ActivateRoom();
     void PrepareNextRoom();
@@ -212,6 +226,8 @@ private:
     void BuildPortalBarrier(const FVector& Plane);
     void AdvanceRoom();
     void BuildPickups();
+    int32 CellsForRoom(ERoomKind Kind, int32 Floor) const;
+    AActor* GetNearbyCell(const AShadowRunner& Player) const;
     void SpawnDrone(FDrone& Drone, const FVector& Point);
     void UpdateDroneFlight(FDrone& Drone, const FRoom& Room, const AShadowRunner& Player, double Now,
                            float DeltaSeconds, bool bTrackPlayer);
@@ -264,6 +280,13 @@ private:
     FRandomStream RoomRandom;
     bool bNextReady = false;
     int32 RoomsThisFloor = 0;
+    int32 CombatRoomsPerFloorSetting = 3;
+    bool bDebugModuleRequested = false;
+    bool bDebugModuleConsumed = false;
+    bool bDebugModuleValid = false;
+    ERoomKind DebugRoomKind = ERoomKind::Reception;
+    int32 DebugVariant = 0;
+    FString DebugModuleName;
     AActor* CarbinePickup = nullptr;
     float GateHeight = 0;
 };
